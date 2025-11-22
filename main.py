@@ -11,13 +11,13 @@ from amadeus import Client, ResponseError
 # ------------- Models ------------- #
 
 class SearchParams(BaseModel):
-    origin: str                 # "LON"
-    destination: str            # "TLV"
-    earliestDeparture: date     # "2025-12-22"
-    latestDeparture: date       # "2026-01-01"
-    minStayDays: int            # 21
-    maxStayDays: int            # 28
-    maxPrice: float             # 2000
+    origin: str
+    destination: str
+    earliestDeparture: date
+    latestDeparture: date
+    minStayDays: int
+    maxStayDays: int
+    maxPrice: float
     cabin: str = "BUSINESS"
     passengers: int = 1
 
@@ -37,20 +37,20 @@ class FlightOption(BaseModel):
 
 app = FastAPI()
 
-# Allow your Base44 frontend to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # you can replace "*" with your Base44 domain once it is final
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 # ------------- Amadeus client ------------- #
 
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
 AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
-AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")  # "test" or "production"
+AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")
 
 hostname = "production" if AMADEUS_ENV.lower() == "production" else "test"
 
@@ -66,7 +66,6 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
 # ------------- Helpers ------------- #
 
 def dummy_results(params: SearchParams) -> List[FlightOption]:
-    """Fallback results when Amadeus returns nothing or fails."""
     return [
         FlightOption(
             id="TK123",
@@ -95,14 +94,12 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
     price = float(offer["price"]["grandTotal"])
     currency = offer["price"]["currency"]
 
-    # Take first segments for basic display
     first_itinerary = offer["itineraries"][0]
     last_itinerary = offer["itineraries"][-1]
 
     departure_date = first_itinerary["segments"][0]["departure"]["at"][:10]
     return_date = last_itinerary["segments"][-1]["arrival"]["at"][:10]
 
-    # Use first validating airline if available
     airline_code = ""
     if "validatingAirlineCodes" in offer and offer["validatingAirlineCodes"]:
         airline_code = offer["validatingAirlineCodes"][0]
@@ -117,7 +114,6 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
         departureDate=departure_date,
         returnDate=return_date,
         stops=stops_outbound,
-        # For MVP, bookingUrl is just placeholder
         bookingUrl=None,
     )
 
@@ -137,21 +133,19 @@ def health():
 @app.post("/search-business")
 def search_business(params: SearchParams):
     """
-    Main endpoint used by the Base44 frontend.
-    Tries Amadeus first, falls back to dummy data if needed.
+    Business search.
+    Try Amadeus first, fall back to dummy results if nothing returned.
     """
 
-    # If Amadeus is not configured, return dummy flights
+    # If Amadeus is not configured
     if amadeus is None:
         return {
             "status": "ok",
-            "source": "dummy",
+            "source": "dummy_no_amadeus",
             "options": [o.dict() for o in dummy_results(params)],
         }
 
     try:
-        # Simple MVP logic
-        # Use earliestDeparture as departureDate and latestDeparture as returnDate
         response = amadeus.shopping.flight_offers_search.get(
             originLocationCode=params.origin,
             destinationLocationCode=params.destination,
@@ -165,32 +159,38 @@ def search_business(params: SearchParams):
 
         offers = response.data or []
 
-        # Map to FlightOption objects
+        # If Amadeus returned nothing
+        if not offers:
+            return {
+                "status": "no_business_found",
+                "source": "amadeus_fallback_dummy",
+                "options": [o.dict() for o in dummy_results(params)],
+            }
+
         mapped = [
             map_amadeus_offer_to_option(offer, params, i)
             for i, offer in enumerate(offers)
         ]
 
-        # TEMP: Disable price filter for debugging BUSINESS class
-mapped.sort(key=lambda x: x.price)
+        # Sort, do not filter by price
+        mapped.sort(key=lambda x: x.price)
 
-return {
-    "status": "ok",
-    "source": "amadeus",
-    "options": [o.dict() for o in mapped],
-}
+        return {
+            "status": "ok",
+            "source": "amadeus",
+            "options": [o.dict() for o in mapped],
+        }
 
     except ResponseError as e:
-        # Amadeus error, log friendly message and return dummy data
         print("Amadeus API error:", e)
         return {
             "status": "ok",
             "source": "dummy_on_error",
             "options": [o.dict() for o in dummy_results(params)],
         }
+
     except Exception as e:
-        # Any other error, same fallback
-        print("Unexpected error in search_business:", e)
+        print("Unexpected error:", e)
         return {
             "status": "ok",
             "source": "dummy_on_error",
