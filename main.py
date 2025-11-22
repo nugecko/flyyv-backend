@@ -171,25 +171,14 @@ def search_business(params: SearchParams):
             for i, offer in enumerate(offers)
         ]
 
-        # Filter by maxPrice
-        filtered = [m for m in mapped if m.price <= params.maxPrice]
+        # TEMP: Disable price filter for debugging BUSINESS class
+mapped.sort(key=lambda x: x.price)
 
-        # Sort by price
-        filtered.sort(key=lambda x: x.price)
-
-        if not filtered:
-            # No offer under the budget, let the frontend show "no results"
-            return {
-                "status": "no_results",
-                "source": "amadeus",
-                "options": [],
-            }
-
-        return {
-            "status": "ok",
-            "source": "amadeus",
-            "options": [o.dict() for o in filtered],
-        }
+return {
+    "status": "ok",
+    "source": "amadeus",
+    "options": [o.dict() for o in mapped],
+}
 
     except ResponseError as e:
         # Amadeus error, log friendly message and return dummy data
