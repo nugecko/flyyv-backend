@@ -527,24 +527,24 @@ def search_business(params: SearchParams):
 
 class CreditUpdateRequest(BaseModel):
     userId: str
-    amount: int
-    reason: str
+    delta: int
+    reason: Optional[str] = None
 
 
 # In memory store for MVP, later you can replace with a database
 USER_WALLETS: dict[str, int] = {}
 
 
-@app.post("/admin/update-credits")
-def admin_update_credits(
+@app.post("/admin/add-credits")
+def admin_add_credits(
     payload: CreditUpdateRequest,
-    x_admin_token: str = Header(None),
+    x_admin_token: str = Header(..., alias="X-Admin-Token"),
 ):
     """
     Admin only endpoint to adjust user wallet credits.
 
     Expects header: X-Admin-Token = ADMIN_API_TOKEN
-    Body: { "userId": "...", "amount": 250, "reason": "..." }
+    Body: { "userId": "...", "delta": 250, "reason": "..." }
 
     Returns: { "userId": "...", "newBalance": 250 }
     """
@@ -558,7 +558,7 @@ def admin_update_credits(
     user_id = payload.userId
     current_balance = USER_WALLETS.get(user_id, 0)
 
-    new_balance = current_balance + payload.amount
+    new_balance = current_balance + payload.delta
     if new_balance < 0:
         new_balance = 0
 
