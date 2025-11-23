@@ -1,9 +1,9 @@
 import os
 import re
-from datetime import date, timedelta, datetime
-from typing import List, Optional, Dict
+from datetime import date, timedelta
+from typing import List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from amadeus import Client, ResponseError
@@ -41,37 +41,25 @@ class FlightOption(BaseModel):
     url: Optional[str] = None
 
 
-class WalletEvent(BaseModel):
-    date: datetime
-    description: str
-    change: int
-    balance_after: int
-
-
-class AdminCreditRequest(BaseModel):
-    userId: str
-    amount: int      # positive to add credits, negative to remove
-    reason: str
-
-
 # ------------- FastAPI app ------------- #
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # you can later restrict this to your Base44 domains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ------------- Amadeus client ------------- #
+# ------------- Amadeus client and admin token ------------- #
 
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
 AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
 AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")
+ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
 
 hostname = "production" if AMADEUS_ENV.lower() == "production" else "test"
 
@@ -82,18 +70,6 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
         client_secret=AMADEUS_API_SECRET,
         hostname=hostname,
     )
-
-
-# ------------- Wallet storage and admin config ------------- #
-
-# Simple admin token for securing admin endpoints
-ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
-
-# In memory wallet balances per user id
-user_wallets: Dict[str, int] = {}
-
-# In memory wallet history per user id
-wallet_history: Dict[str, List[WalletEvent]] = {}
 
 
 # ------------- Airline maps ------------- #
@@ -396,16 +372,15 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
 def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
     """
     Generate (departure, return) pairs within the window.
+
     For MVP we support stay lengths of 4 and 7 nights inside the
     minStayDays and maxStayDays range, up to max_pairs combinations.
     """
     stays: List[int] = []
 
-    # Use explicit stay length if user chose a single value
     if params.minStayDays == params.maxStayDays:
         stays = [params.minStayDays]
     else:
-        # Otherwise pick 4 and 7 if they fit inside the range
         for s in (4, 7):
             if params.minStayDays <= s <= params.maxStayDays:
                 stays.append(s)
@@ -428,42 +403,7 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
     return pairs
 
 
-def adjust_user_credits(user_id: str, amount: int, reason: str) -> int:
-    """
-    Adjust credits for a given user.
-
-    amount:
-        positive value adds credits
-        negative value removes credits
-
-    Returns the new wallet balance.
-    """
-
-    current_balance = user_wallets.get(user_id, 0)
-    new_balance = current_balance + amount
-
-    if new_balance < 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Insufficient credits. Adjustment would result in negative balance.",
-        )
-
-    user_wallets[user_id] = new_balance
-
-    event = WalletEvent(
-        date=datetime.utcnow(),
-        description=reason,
-        change=amount,
-        balance_after=new_balance,
-    )
-
-    history = wallet_history.setdefault(user_id, [])
-    history.insert(0, event)
-
-    return new_balance
-
-
-# ------------- Routes ------------- #
+# ------------- Routes: health and search ------------- #
 
 @app.get("/")
 def home():
@@ -473,47 +413,6 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-@app.post("/admin/add-credits")
-def admin_add_credits(
-    payload: AdminCreditRequest,
-    x_admin_token: Optional[str] = Header(None),
-):
-    """
-    Admin endpoint to adjust a user's credits.
-
-    Secured with the X-Admin-Token header that must match ADMIN_API_TOKEN.
-    """
-
-    if ADMIN_API_TOKEN is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Admin API token is not configured on the server.",
-        )
-
-    if x_admin_token != ADMIN_API_TOKEN:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin token.",
-        )
-
-    if payload.amount == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Amount must be non zero.",
-        )
-
-    new_balance = adjust_user_credits(
-        user_id=payload.userId,
-        amount=payload.amount,
-        reason=payload.reason,
-    )
-
-    return {
-        "userId": payload.userId,
-        "newBalance": new_balance,
-    }
 
 
 @app.post("/search-business")
@@ -540,7 +439,6 @@ def search_business(params: SearchParams):
         offers = []
 
         if window_days <= 1:
-            # Exact dates search, current behaviour
             resp = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=params.origin,
                 destinationLocationCode=params.destination,
@@ -554,7 +452,6 @@ def search_business(params: SearchParams):
             offers = resp.data or []
 
         elif window_days <= 14:
-            # Flexible search inside the window, limited combinations
             date_pairs = generate_date_pairs(params, max_pairs=20)
             for dep, ret in date_pairs:
                 try:
@@ -574,7 +471,6 @@ def search_business(params: SearchParams):
                     continue
 
         else:
-            # Safety net to protect API quota
             print(
                 "Date window larger than 14 days, using single Amadeus call "
                 "from earliestDeparture to latestDeparture."
@@ -625,3 +521,50 @@ def search_business(params: SearchParams):
             "source": "dummy_on_error",
             "options": [o.dict() for o in dummy_results(params)],
         }
+
+
+# ------------- Admin credits endpoint ------------- #
+
+class CreditUpdateRequest(BaseModel):
+    userId: str
+    amount: int
+    reason: str
+
+
+# In memory store for MVP, later you can replace with a database
+USER_WALLETS: dict[str, int] = {}
+
+
+@app.post("/admin/update-credits")
+def admin_update_credits(
+    payload: CreditUpdateRequest,
+    x_admin_token: str = Header(None),
+):
+    """
+    Admin only endpoint to adjust user wallet credits.
+
+    Expects header: X-Admin-Token = ADMIN_API_TOKEN
+    Body: { "userId": "...", "amount": 250, "reason": "..." }
+
+    Returns: { "userId": "...", "newBalance": 250 }
+    """
+
+    if ADMIN_API_TOKEN is None:
+        raise HTTPException(status_code=500, detail="Admin token not configured")
+
+    if x_admin_token != ADMIN_API_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    user_id = payload.userId
+    current_balance = USER_WALLETS.get(user_id, 0)
+
+    new_balance = current_balance + payload.amount
+    if new_balance < 0:
+        new_balance = 0
+
+    USER_WALLETS[user_id] = new_balance
+
+    return {
+        "userId": user_id,
+        "newBalance": new_balance,
+    }
