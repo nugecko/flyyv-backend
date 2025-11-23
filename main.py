@@ -47,7 +47,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can later restrict this to your Base44 domains
+    allow_origins=["*"],  # later you can restrict this to your Base44 domains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,7 +61,7 @@ AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
 AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
 
-hostname = "production" if AMADEUS_ENV.lower() == "production" else "test"
+hostname = "production" if AMADEUS_ENV and AMADEUS_ENV.lower() == "production" else "test"
 
 amadeus = None
 if AMADEUS_API_KEY and AMADEUS_API_SECRET:
@@ -372,9 +372,6 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
 def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
     """
     Generate (departure, return) pairs within the window.
-
-    For MVP we support stay lengths of 4 and 7 nights inside the
-    minStayDays and maxStayDays range, up to max_pairs combinations.
     """
     stays: List[int] = []
 
@@ -419,12 +416,6 @@ def health():
 def search_business(params: SearchParams):
     """
     Main endpoint used by the Base44 frontend.
-
-    Logic:
-      * If Amadeus is not configured: always return dummy flights
-      * If date window is one day or less: one simple Amadeus call
-      * If window is up to 14 days: scan multiple date combinations
-      * If window is larger than 14 days: fall back to single call
     """
 
     if amadeus is None:
@@ -540,15 +531,26 @@ USER_WALLETS: dict[str, int] = {}
 @app.post("/admin/add-credits")
 def admin_add_credits(
     payload: CreditUpdateRequest,
-    x_admin_token: str = Header(..., alias="X-Admin-Token"),
+    x_admin_token: str = Header(None, alias="X-Admin-Token"),
 ):
-    if ADMIN_API_TOKEN is None:
+    # Debug logging for token mismatch investigation
+    print("DEBUG_received_token:", repr(x_admin_token))
+    print("DEBUG_expected_token:", repr(ADMIN_API_TOKEN))
+
+    # Normalise values
+    received = (x_admin_token or "").strip()
+    expected = (ADMIN_API_TOKEN or "").strip()
+
+    if received.lower().startswith("bearer "):
+        received = received[7:].strip()
+
+    if expected == "":
         raise HTTPException(status_code=500, detail="Admin token not configured")
 
-    if x_admin_token != ADMIN_API_TOKEN:
+    if received != expected:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
-    # Accept any name Base44 might send
+    # Accept any field name for the credit change
     change_amount = (
         payload.delta
         if payload.delta is not None
