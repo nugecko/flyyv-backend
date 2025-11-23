@@ -529,10 +529,11 @@ class CreditUpdateRequest(BaseModel):
     userId: str
     amount: Optional[int] = None
     delta: Optional[int] = None
+    creditAmount: Optional[int] = None
+    value: Optional[int] = None
     reason: Optional[str] = None
 
 
-# In memory store for MVP, later you can replace with a database
 USER_WALLETS: dict[str, int] = {}
 
 
@@ -541,42 +542,34 @@ def admin_add_credits(
     payload: CreditUpdateRequest,
     x_admin_token: str = Header(..., alias="X-Admin-Token"),
 ):
-    """
-    Admin only endpoint to adjust user wallet credits.
-
-    Expects header: X-Admin-Token = ADMIN_API_TOKEN
-    Body can use either:
-      { "userId": "...", "amount": 250, "reason": "..." }
-    or:
-      { "userId": "...", "delta": 250, "reason": "..." }
-
-    Returns: { "userId": "...", "newBalance": 250 }
-    """
-
     if ADMIN_API_TOKEN is None:
         raise HTTPException(status_code=500, detail="Admin token not configured")
 
     if x_admin_token != ADMIN_API_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
-    # Accept both "delta" and "amount"
-    change_amount = payload.delta if payload.delta is not None else payload.amount
+    # Accept any name Base44 might send
+    change_amount = (
+        payload.delta
+        if payload.delta is not None
+        else payload.amount
+        if payload.amount is not None
+        else payload.creditAmount
+        if payload.creditAmount is not None
+        else payload.value
+    )
+
     if change_amount is None:
         raise HTTPException(
             status_code=400,
-            detail="Missing amount or delta field in request body",
+            detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
         )
 
-    user_id = payload.userId
-    current_balance = USER_WALLETS.get(user_id, 0)
-
-    new_balance = current_balance + change_amount
-    if new_balance < 0:
-        new_balance = 0
-
-    USER_WALLETS[user_id] = new_balance
+    current = USER_WALLETS.get(payload.userId, 0)
+    new_balance = max(0, current + change_amount)
+    USER_WALLETS[payload.userId] = new_balance
 
     return {
-        "userId": user_id,
+        "userId": payload.userId,
         "newBalance": new_balance,
     }
