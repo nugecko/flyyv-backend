@@ -1,13 +1,12 @@
 import os
 import re
-from datetime import date, timedelta, datetime
-from typing import List, Optional, Dict, Any
+from datetime import date, timedelta
+from typing import List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from amadeus import Client, ResponseError
-
 
 # ------------- Models ------------- #
 
@@ -53,7 +52,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ------------- Amadeus client and admin token ------------- #
 
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
@@ -70,7 +68,6 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
         client_secret=AMADEUS_API_SECRET,
         hostname=hostname,
     )
-
 
 # ------------- Airline maps ------------- #
 
@@ -263,7 +260,7 @@ AIRLINE_BOOKING_URLS = {
     "AK": "https://www.airasia.com/",
     "QF": "https://www.qantas.com/",
     "NZ": "https://www.airnewzealand.co.uk/",
-    "VA": "https://www.virginaustralia.com/",
+    "VA": "https://www.virginAustralia.com/",
     "JQ": "https://www.jetstar.com/",
     "ET": "https://www.ethiopianairlines.com/",
     "KQ": "https://www.kenya-airways.com/",
@@ -277,7 +274,6 @@ AIRLINE_BOOKING_URLS = {
     "XQ": "https://www.sunexpress.com/en/",
     "PC": "https://www.flypgs.com/en",
 }
-
 
 # ------------- Helpers ------------- #
 
@@ -370,9 +366,6 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
 
 
 def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
-    """
-    Generate (departure, return) pairs within the window.
-    """
     stays: List[int] = []
 
     if params.minStayDays == params.maxStayDays:
@@ -399,6 +392,10 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
 
     return pairs
 
+# ------------- In memory wallet store ------------- #
+
+# key: userId (Base44 user id or whatever Base44 sends)
+USER_WALLETS: dict[str, int] = {}
 
 # ------------- Routes: health and search ------------- #
 
@@ -411,13 +408,8 @@ def home():
 def health():
     return {"status": "ok"}
 
-
 @app.post("/search-business")
 def search_business(params: SearchParams):
-    """
-    Main endpoint used by the Base44 frontend.
-    """
-
     if amadeus is None:
         return {
             "status": "ok",
@@ -513,7 +505,6 @@ def search_business(params: SearchParams):
             "options": [o.dict() for o in dummy_results(params)],
         }
 
-
 # ------------- Admin credits endpoint ------------- #
 
 class CreditUpdateRequest(BaseModel):
@@ -524,29 +515,12 @@ class CreditUpdateRequest(BaseModel):
     value: Optional[int] = None
     reason: Optional[str] = None
 
-
-# In memory stores for MVP
-USER_WALLETS: Dict[str, int] = {}
-USER_WALLET_HISTORY: Dict[str, List[Dict[str, Any]]] = {}
-
-
 @app.post("/admin/update-credits")
-@app.post("/admin/add-credits")
 def admin_update_credits(
     payload: CreditUpdateRequest,
     x_admin_token: str = Header(None, alias="X-Admin-Token"),
 ):
-    """
-    Admin endpoint to adjust user wallet credits.
-
-    Accepts multiple possible field names for the credit change:
-    - delta
-    - amount
-    - creditAmount
-    - value
-    """
-
-    # Debug logging for token investigation if needed
+    # Debug logging for token investigation
     print("DEBUG_received_token:", repr(x_admin_token))
     print("DEBUG_expected_token:", repr(ADMIN_API_TOKEN))
 
@@ -562,7 +536,6 @@ def admin_update_credits(
     if received != expected:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
-    # Accept any field name for the credit change
     change_amount = (
         payload.delta
         if payload.delta is not None
@@ -579,77 +552,51 @@ def admin_update_credits(
             detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
         )
 
-    user_id = payload.userId
-    current = USER_WALLETS.get(user_id, 0)
+    current = USER_WALLETS.get(payload.userId, 0)
     new_balance = max(0, current + change_amount)
-    USER_WALLETS[user_id] = new_balance
-
-    # Record history entry
-    entry = {
-        "date": datetime.utcnow().isoformat() + "Z",
-        "description": payload.reason or "Manual adjustment",
-        "change": change_amount,
-        "balance_after": new_balance,
-    }
-    USER_WALLET_HISTORY.setdefault(user_id, []).append(entry)
+    USER_WALLETS[payload.userId] = new_balance
 
     return {
-        "userId": user_id,
+        "userId": payload.userId,
         "newBalance": new_balance,
     }
-
 
 # ------------- Profile endpoint ------------- #
 
 @app.get("/profile")
-def get_profile(
-    userId: Optional[str] = Query(None),
-    user_id: Optional[str] = Query(None),
-    email: Optional[str] = Query(None),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-):
+def get_profile(x_user_id: str = Header(None, alias="X-User-Id")):
     """
-    Returns profile data in the schema expected by Base44.
+    Profile endpoint used by the Flyvo app.
 
-    Tries several ways to determine the user id:
-    - userId query parameter
-    - user_id query parameter
-    - email query parameter
-    - X-User-Id header
+    For now we rely on Base44 to send X-User-Id header
+    containing the backend user id that matches the one
+    used in /admin/update-credits.
     """
 
-    uid = userId or user_id or email or x_user_id or "test-user-1"
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id header")
 
-    wallet_balance = USER_WALLETS.get(uid, 0)
-    history = USER_WALLET_HISTORY.get(uid, [])
+    wallet_balance = USER_WALLETS.get(x_user_id, 0)
 
-    # Very simple user info for now, Base44 mainly needs wallet part
-    user_obj = {
-        "name": uid,
-        "email": uid,
-        "plan": None,  # "BASIC", "PRO", "ELITE", or null
-    }
-
-    subscription_obj = {
-        "plan": "Flyvo Free",
-        "billing_cycle": "N/A",
-        "renewal_date": None,
-        "monthly_credits": 0,
-    }
-
-    wallet_obj = {
-        "wallet_credits": wallet_balance,
-        "history": history,
-    }
-
-    alerts_obj = {
-        "active_count": 0,
-        "total_count": 0,
-    }
-
+    # Basic dummy data, you can wire real plan info later
     return {
-        "user": user_obj,
-        "subscription": subscription_obj,
-        "wallet": wallet_obj,
-        "alerts": alerts_obj,
+        "user": {
+            "name": "Flyvo User",
+            "email": "user@example.com",
+            "plan": "BASIC",
+        },
+        "subscription": {
+            "plan": "Flyvo Free",
+            "billing_cycle": "N/A",
+            "renewal_date": None,
+            "monthly_credits": 0,
+        },
+        "wallet": {
+            "wallet_credits": wallet_balance,
+            "history": [],  # history not implemented yet
+        },
+        "alerts": {
+            "active_count": 0,
+            "total_count": 0,
+        },
     }
