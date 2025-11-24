@@ -1,12 +1,13 @@
 import os
 import re
-from datetime import date, timedelta
-from typing import List, Optional
+from datetime import date, timedelta, datetime
+from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from amadeus import Client, ResponseError
+
 
 # ------------- Models ------------- #
 
@@ -17,9 +18,12 @@ class SearchParams(BaseModel):
     latestDeparture: date
     minStayDays: int
     maxStayDays: int
-    maxPrice: float
+    # None means no price limit
+    maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
+    # "flexible" = current Flyvo window scanning, "fixed" = one off search
+    searchMode: Optional[str] = "flexible"
 
 
 class FlightOption(BaseModel):
@@ -52,6 +56,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ------------- Amadeus client and admin token ------------- #
 
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
@@ -68,6 +73,7 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
         client_secret=AMADEUS_API_SECRET,
         hostname=hostname,
     )
+
 
 # ------------- Airline maps ------------- #
 
@@ -260,7 +266,7 @@ AIRLINE_BOOKING_URLS = {
     "AK": "https://www.airasia.com/",
     "QF": "https://www.qantas.com/",
     "NZ": "https://www.airnewzealand.co.uk/",
-    "VA": "https://www.virginAustralia.com/",
+    "VA": "https://www.virginaustralia.com/",
     "JQ": "https://www.jetstar.com/",
     "ET": "https://www.ethiopianairlines.com/",
     "KQ": "https://www.kenya-airways.com/",
@@ -274,6 +280,7 @@ AIRLINE_BOOKING_URLS = {
     "XQ": "https://www.sunexpress.com/en/",
     "PC": "https://www.flypgs.com/en",
 }
+
 
 # ------------- Helpers ------------- #
 
@@ -326,7 +333,7 @@ def dummy_results(params: SearchParams) -> List[FlightOption]:
     ]
 
 
-def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> FlightOption:
+def map_amadeus_offer_to_option(offer: Dict[str, Any], params: SearchParams, index: int) -> FlightOption:
     price = float(offer["price"]["grandTotal"])
     currency = offer["price"]["currency"]
 
@@ -366,6 +373,10 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
 
 
 def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
+    """
+    Generate (departure, return) pairs within the window.
+    For now, we keep the simple 4 and 7 night stays when in flexible mode.
+    """
     stays: List[int] = []
 
     if params.minStayDays == params.maxStayDays:
@@ -392,10 +403,6 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
 
     return pairs
 
-# ------------- In memory wallet store ------------- #
-
-# key: userId (Base44 user id or whatever Base44 sends)
-USER_WALLETS: dict[str, int] = {}
 
 # ------------- Routes: health and search ------------- #
 
@@ -408,8 +415,20 @@ def home():
 def health():
     return {"status": "ok"}
 
+
 @app.post("/search-business")
 def search_business(params: SearchParams):
+    """
+    Main endpoint used by the Base44 frontend.
+
+    Modes:
+      - searchMode = "flexible" (default):
+          keep current behaviour, scan a window with minStay/maxStay.
+      - searchMode = "fixed":
+          call Amadeus once for earliestDeparture to latestDeparture,
+          ignore minStayDays and maxStayDays.
+    """
+
     if amadeus is None:
         return {
             "status": "ok",
@@ -418,10 +437,11 @@ def search_business(params: SearchParams):
         }
 
     try:
-        window_days = (params.latestDeparture - params.earliestDeparture).days + 1
-        offers = []
+        offers: List[Dict[str, Any]] = []
+        mode = (params.searchMode or "flexible").lower()
 
-        if window_days <= 1:
+        if mode == "fixed":
+            # One off search, no window scanning
             resp = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=params.origin,
                 destinationLocationCode=params.destination,
@@ -433,42 +453,70 @@ def search_business(params: SearchParams):
                 max=20,
             )
             offers = resp.data or []
-
-        elif window_days <= 14:
-            date_pairs = generate_date_pairs(params, max_pairs=20)
-            for dep, ret in date_pairs:
-                try:
-                    resp = amadeus.shopping.flight_offers_search.get(
-                        originLocationCode=params.origin,
-                        destinationLocationCode=params.destination,
-                        departureDate=dep.isoformat(),
-                        returnDate=ret.isoformat(),
-                        adults=params.passengers,
-                        travelClass=params.cabin,
-                        currencyCode="GBP",
-                        max=5,
-                    )
-                    offers.extend(resp.data or [])
-                except ResponseError as e:
-                    print("Amadeus error for", dep, "to", ret, ":", e)
-                    continue
-
         else:
-            print(
-                "Date window larger than 14 days, using single Amadeus call "
-                "from earliestDeparture to latestDeparture."
-            )
-            resp = amadeus.shopping.flight_offers_search.get(
-                originLocationCode=params.origin,
-                destinationLocationCode=params.destination,
-                departureDate=params.earliestDeparture.isoformat(),
-                returnDate=params.latestDeparture.isoformat(),
-                adults=params.passengers,
-                travelClass=params.cabin,
-                currencyCode="GBP",
-                max=20,
-            )
-            offers = resp.data or []
+            # Existing flexible window behaviour
+            window_days = (params.latestDeparture - params.earliestDeparture).days + 1
+
+            if window_days <= 1:
+                resp = amadeus.shopping.flight_offers_search.get(
+                    originLocationCode=params.origin,
+                    destinationLocationCode=params.destination,
+                    departureDate=params.earliestDeparture.isoformat(),
+                    returnDate=params.latestDeparture.isoformat(),
+                    adults=params.passengers,
+                    travelClass=params.cabin,
+                    currencyCode="GBP",
+                    max=20,
+                )
+                offers = resp.data or []
+
+            elif window_days <= 14:
+                date_pairs = generate_date_pairs(params, max_pairs=20)
+                for dep, ret in date_pairs:
+                    try:
+                        resp = amadeus.shopping.flight_offers_search.get(
+                            originLocationCode=params.origin,
+                            destinationLocationCode=params.destination,
+                            departureDate=dep.isoformat(),
+                            returnDate=ret.isoformat(),
+                            adults=params.passengers,
+                            travelClass=params.cabin,
+                            currencyCode="GBP",
+                            max=5,
+                        )
+                        offers.extend(resp.data or [])
+                    except ResponseError as e:
+                        print("Amadeus error for", dep, "to", ret, ":", e)
+                        continue
+
+            else:
+                print(
+                    "Date window larger than 14 days, using single Amadeus call "
+                    "from earliestDeparture to latestDeparture."
+                )
+                resp = amadeus.shopping.flight_offers_search.get(
+                    originLocationCode=params.origin,
+                    destinationLocationCode=params.destination,
+                    departureDate=params.earliestDeparture.isoformat(),
+                    returnDate=params.latestDeparture.isoformat(),
+                    adults=params.passengers,
+                    travelClass=params.cabin,
+                    currencyCode="GBP",
+                    max=20,
+                )
+                offers = resp.data or []
+
+        # Apply optional maxPrice filter on top
+        if params.maxPrice is not None:
+            try:
+                limit = float(params.maxPrice)
+                offers = [
+                    o
+                    for o in offers
+                    if float(o.get("price", {}).get("grandTotal", "0")) <= limit
+                ]
+            except Exception as e:
+                print("Error applying maxPrice filter:", e)
 
         if not offers:
             return {
@@ -505,6 +553,7 @@ def search_business(params: SearchParams):
             "options": [o.dict() for o in dummy_results(params)],
         }
 
+
 # ------------- Admin credits endpoint ------------- #
 
 class CreditUpdateRequest(BaseModel):
@@ -515,15 +564,22 @@ class CreditUpdateRequest(BaseModel):
     value: Optional[int] = None
     reason: Optional[str] = None
 
-@app.post("/admin/update-credits")
-def admin_update_credits(
+
+# In memory store for MVP, later you can replace with a database
+USER_WALLETS: Dict[str, int] = {}
+WALLET_HISTORY: Dict[str, List[Dict[str, Any]]] = {}
+
+
+@app.post("/admin/add-credits")
+def admin_add_credits(
     payload: CreditUpdateRequest,
     x_admin_token: str = Header(None, alias="X-Admin-Token"),
 ):
-    # Debug logging for token investigation
+    # Debug logging for token mismatch investigation
     print("DEBUG_received_token:", repr(x_admin_token))
     print("DEBUG_expected_token:", repr(ADMIN_API_TOKEN))
 
+    # Normalise values
     received = (x_admin_token or "").strip()
     expected = (ADMIN_API_TOKEN or "").strip()
 
@@ -536,6 +592,7 @@ def admin_update_credits(
     if received != expected:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
+    # Accept any field name for the credit change
     change_amount = (
         payload.delta
         if payload.delta is not None
@@ -552,103 +609,62 @@ def admin_update_credits(
             detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
         )
 
-    current = USER_WALLETS.get(payload.userId, 0)
+    user_id = payload.userId
+    current = USER_WALLETS.get(user_id, 0)
     new_balance = max(0, current + change_amount)
-    USER_WALLETS[payload.userId] = new_balance
+    USER_WALLETS[user_id] = new_balance
+
+    # Log simple history entry
+    history = WALLET_HISTORY.setdefault(user_id, [])
+    history.append(
+        {
+            "date": datetime.utcnow().isoformat(),
+            "description": payload.reason or "Manual credit update",
+            "change": change_amount,
+            "balance_after": new_balance,
+        }
+    )
 
     return {
-        "userId": payload.userId,
+        "userId": user_id,
         "newBalance": new_balance,
     }
 
-# ------------- Profile endpoint ------------- #
+
+# ------------- Profile endpoint for wallet display ------------- #
 
 @app.get("/profile")
-def get_profile(x_user_id: str = Header(None, alias="X-User-Id")):
+def get_profile(x_user_id: Optional[str] = Header(None, alias="X-User-Id")):
     """
-    Profile endpoint used by the Flyvo frontend.
+    Simple MVP profile endpoint.
 
-    Frontend calls:
-      GET /profile
-    and includes header:
-      X-User-Id: <base44_user_id>
-
-    We look up that user in USER_WALLETS and return wallet_credits
-    in the schema Base44 expects.
+    Base44 sends the Base44 user id in X-User-Id.
+    We use that as the key in USER_WALLETS and WALLET_HISTORY.
     """
 
-    if x_user_id is None:
-        raise HTTPException(status_code=400, detail="Missing X-User-Id header")
+    user_id = x_user_id or "test-user-1"
 
-    wallet_balance = USER_WALLETS.get(x_user_id, 0)
+    wallet_credits = USER_WALLETS.get(user_id, 0)
+    history = WALLET_HISTORY.get(user_id, [])
 
     return {
         "user": {
             "name": "Flyvo User",
             "email": "user@example.com",
-            "plan": "BASIC",  # "BASIC", "PRO", "ELITE", or null
+            "plan": "BASIC",  # BASIC, PRO, ELITE or null
         },
         "subscription": {
             "plan": "Flyvo Free",
-            "billing_cycle": "N/A",
+            "billing_cycle": None,
             "renewal_date": None,
             "monthly_credits": 0,
         },
         "wallet": {
-            "wallet_credits": wallet_balance,
-            "history": [],
+            "wallet_credits": wallet_credits,
+            "history": history,
         },
         "alerts": {
             "active_count": 0,
             "total_count": 0,
         },
     }
-# ------------- User profile endpoint ------------- #
-
-from fastapi import Request
-
-@app.get("/profile")
-def get_profile(
-    request: Request,
-    x_user_id: str = Header(None, alias="X-User-Id")
-):
-    if not x_user_id:
-        raise HTTPException(status_code=400, detail="Missing X-User-Id header")
-
-    # Pull wallet balance from stored credits
-    wallet_balance = USER_WALLETS.get(x_user_id, 0)
-
-    # Dummy user info for now
-    user = {
-        "name": "Flyvo User",
-        "email": "user@example.com",
-        "plan": "BASIC",
-    }
-
-    # Dummy subscription info
-    subscription = {
-        "plan": "Flyvo Free",
-        "billing_cycle": "N/A",
-        "renewal_date": None,
-        "monthly_credits": 0,
-    }
-
-    # Wallet section
-    wallet = {
-        "wallet_credits": wallet_balance,
-        "history": []  # can implement later
-    }
-
-    # Dummy alerts
-    alerts = {
-        "active_count": 0,
-        "total_count": 0
-    }
-
-    return {
-        "user": user,
-        "subscription": subscription,
-        "wallet": wallet,
-        "alerts": alerts,
-    }
-
