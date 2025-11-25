@@ -1,7 +1,7 @@
 import os
 import re
-from datetime import date, timedelta, datetime
-from typing import List, Optional, Dict, Any
+from datetime import date, timedelta
+from typing import List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,11 +22,9 @@ class SearchParams(BaseModel):
     maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
-    # "flexible" = current Flyvo window scanning, "fixed" = one off search
-    searchMode: Optional[str] = "flexible"
-    # Number of stops filter:
-    # 0 = direct only, 1 = exactly one stop, 2 = two or more stops
-    stopsFilter: Optional[int] = None
+    # Optional filter for number of stops, for example [0] or [0,1,2]
+    # 3 is treated as "3 or more stops"
+    stopsFilter: Optional[List[int]] = None
 
 
 class FlightOption(BaseModel):
@@ -326,7 +324,7 @@ def dummy_results(params: SearchParams) -> List[FlightOption]:
             currency="GBP",
             departureDate=params.earliestDeparture.isoformat(),
             returnDate=params.latestDeparture.isoformat(),
-            stops=2,
+            stops=1,
             durationMinutes=270,
             totalDurationMinutes=270,
             duration="PT4H30M",
@@ -336,7 +334,7 @@ def dummy_results(params: SearchParams) -> List[FlightOption]:
     ]
 
 
-def map_amadeus_offer_to_option(offer: Dict[str, Any], params: SearchParams, index: int) -> FlightOption:
+def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> FlightOption:
     price = float(offer["price"]["grandTotal"])
     currency = offer["price"]["currency"]
 
@@ -375,43 +373,58 @@ def map_amadeus_offer_to_option(offer: Dict[str, Any], params: SearchParams, ind
     )
 
 
-def generate_date_pairs(params: SearchParams, max_pairs: int = 40) -> List[tuple[date, date]]:
+def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
     """
-    Generate rolling (departure, return) pairs.
-
-    For each stay length between minStayDays and maxStayDays, move the
-    departure one day at a time from earliestDeparture until the computed
-    return date would pass latestDeparture.
-
-    Example: minStayDays = maxStayDays = 7, window 1 Jan to 31 Jan
-    gives 1→8, 2→9, 3→10 and so on until the last pair whose return
-    date is still inside the window.
+    Generate (departure, return) pairs within the window.
     """
-    pairs: List[tuple[date, date]] = []
+    stays: List[int] = []
 
-    if params.minStayDays <= 0 or params.maxStayDays <= 0:
-        return pairs
+    if params.minStayDays == params.maxStayDays:
+        stays = [params.minStayDays]
+    else:
+        for s in (4, 7):
+            if params.minStayDays <= s <= params.maxStayDays:
+                stays.append(s)
 
-    if params.minStayDays > params.maxStayDays:
-        return pairs
+    if not stays:
+        stays = [params.minStayDays]
 
-    # All stay lengths we support in this search
-    stays = list(range(params.minStayDays, params.maxStayDays + 1))
+    pairs = []
+    current = params.earliestDeparture
 
-    for stay in stays:
-        # Last possible departure so that return is not after latestDeparture
-        last_departure = params.latestDeparture - timedelta(days=stay)
-        current = params.earliestDeparture
-
-        while current <= last_departure and len(pairs) < max_pairs:
+    while current <= params.latestDeparture and len(pairs) < max_pairs:
+        for stay in stays:
             ret = current + timedelta(days=stay)
-            pairs.append((current, ret))
-            current += timedelta(days=1)
-
-        if len(pairs) >= max_pairs:
-            break
+            if ret <= params.latestDeparture:
+                pairs.append((current, ret))
+                if len(pairs) >= max_pairs:
+                    break
+        current += timedelta(days=1)
 
     return pairs
+
+
+def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
+    """
+    Apply price and stops filters, then sort by price.
+    """
+    filtered = list(options)
+
+    # Price filter
+    if params.maxPrice is not None and params.maxPrice > 0:
+        filtered = [o for o in filtered if o.price <= params.maxPrice]
+
+    # Stops filter, values like [0], [0, 1], [0, 1, 2], [2, 3] etc
+    if params.stopsFilter:
+        allowed = set(params.stopsFilter)
+        if 3 in allowed:
+            # 3 means "3 or more stops"
+            filtered = [o for o in filtered if (o.stops in allowed or o.stops >= 3)]
+        else:
+            filtered = [o for o in filtered if o.stops in allowed]
+
+    filtered.sort(key=lambda x: x.price)
+    return filtered
 
 
 # ------------- Routes: health and search ------------- #
@@ -430,38 +443,23 @@ def health():
 def search_business(params: SearchParams):
     """
     Main endpoint used by the Base44 frontend.
-
-    Modes:
-      - searchMode = "flexible" (default):
-          sliding date window inside earliestDeparture-latestDeparture
-          for all stay lengths between minStayDays and maxStayDays.
-      - searchMode = "fixed":
-          call Amadeus once for earliestDeparture to latestDeparture,
-          ignore minStayDays and maxStayDays.
     """
 
+    # If Amadeus is not configured, return filtered dummy results
     if amadeus is None:
         options = dummy_results(params)
-
-        # Apply stops filter on dummy data as well
-        if params.stopsFilter is not None:
-            if params.stopsFilter == 2:
-                options = [o for o in options if o.stops >= 2]
-            else:
-                options = [o for o in options if o.stops == params.stopsFilter]
-
+        filtered = apply_filters(options, params)
         return {
             "status": "ok",
             "source": "dummy_no_amadeus",
-            "options": [o.dict() for o in options],
+            "options": [o.dict() for o in filtered],
         }
 
     try:
-        offers: List[Dict[str, Any]] = []
-        mode = (params.searchMode or "flexible").lower()
+        window_days = (params.latestDeparture - params.earliestDeparture).days + 1
+        offers = []
 
-        if mode == "fixed":
-            # One off search, no window scanning
+        if window_days <= 1:
             resp = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=params.origin,
                 destinationLocationCode=params.destination,
@@ -473,67 +471,50 @@ def search_business(params: SearchParams):
                 max=20,
             )
             offers = resp.data or []
+
+        elif window_days <= 14:
+            date_pairs = generate_date_pairs(params, max_pairs=20)
+            for dep, ret in date_pairs:
+                try:
+                    resp = amadeus.shopping.flight_offers_search.get(
+                        originLocationCode=params.origin,
+                        destinationLocationCode=params.destination,
+                        departureDate=dep.isoformat(),
+                        returnDate=ret.isoformat(),
+                        adults=params.passengers,
+                        travelClass=params.cabin,
+                        currencyCode="GBP",
+                        max=5,
+                    )
+                    offers.extend(resp.data or [])
+                except ResponseError as e:
+                    print("Amadeus error for", dep, "to", ret, ":", e)
+                    continue
+
         else:
-            # Flexible sliding window search
-            date_pairs = generate_date_pairs(params, max_pairs=40)
-
-            # If for some reason there are no valid pairs, fall back to a single call
-            if not date_pairs:
-                resp = amadeus.shopping.flight_offers_search.get(
-                    originLocationCode=params.origin,
-                    destinationLocationCode=params.destination,
-                    departureDate=params.earliestDeparture.isoformat(),
-                    returnDate=params.latestDeparture.isoformat(),
-                    adults=params.passengers,
-                    travelClass=params.cabin,
-                    currencyCode="GBP",
-                    max=20,
-                )
-                offers = resp.data or []
-            else:
-                for dep, ret in date_pairs:
-                    try:
-                        resp = amadeus.shopping.flight_offers_search.get(
-                            originLocationCode=params.origin,
-                            destinationLocationCode=params.destination,
-                            departureDate=dep.isoformat(),
-                            returnDate=ret.isoformat(),
-                            adults=params.passengers,
-                            travelClass=params.cabin,
-                            currencyCode="GBP",
-                            max=5,
-                        )
-                        offers.extend(resp.data or [])
-                    except ResponseError as e:
-                        print("Amadeus error for", dep, "to", ret, ":", e)
-                        continue
-
-        # Apply optional maxPrice filter on top
-        if params.maxPrice is not None:
-            try:
-                limit = float(params.maxPrice)
-                offers = [
-                    o
-                    for o in offers
-                    if float(o.get("price", {}).get("grandTotal", "0")) <= limit
-                ]
-            except Exception as e:
-                print("Error applying maxPrice filter:", e)
+            print(
+                "Date window larger than 14 days, using single Amadeus call "
+                "from earliestDeparture to latestDeparture."
+            )
+            resp = amadeus.shopping.flight_offers_search.get(
+                originLocationCode=params.origin,
+                destinationLocationCode=params.destination,
+                departureDate=params.earliestDeparture.isoformat(),
+                returnDate=params.latestDeparture.isoformat(),
+                adults=params.passengers,
+                travelClass=params.cabin,
+                currencyCode="GBP",
+                max=20,
+            )
+            offers = resp.data or []
 
         if not offers:
             options = dummy_results(params)
-
-            # Ensure stops filter still works if Amadeus has no results
-            if params.stopsFilter is not None:
-                if params.stopsFilter == 2:
-                    options = [o for o in options if o.stops >= 2]
-                else:
-                    options = [o for o in options if o.stops == params.stopsFilter]
-
+            filtered = apply_filters(options, params)
             return {
                 "status": "ok",
                 "source": "amadeus_no_results_fallback_dummy",
-                "options": [o.dict() for o in options],
+                "options": [o.dict() for o in filtered],
             }
 
         mapped = [
@@ -541,50 +522,31 @@ def search_business(params: SearchParams):
             for i, offer in enumerate(offers)
         ]
 
-        # Apply stops filter on mapped results
-        if params.stopsFilter is not None:
-            if params.stopsFilter == 2:
-                mapped = [o for o in mapped if o.stops >= 2]
-            else:
-                mapped = [o for o in mapped if o.stops == params.stopsFilter]
-
-        mapped.sort(key=lambda x: x.price)
+        filtered = apply_filters(mapped, params)
 
         return {
             "status": "ok",
             "source": "amadeus",
-            "options": [o.dict() for o in mapped],
+            "options": [o.dict() for o in filtered],
         }
 
     except ResponseError as e:
         print("Amadeus API error:", e)
         options = dummy_results(params)
-
-        if params.stopsFilter is not None:
-            if params.stopsFilter == 2:
-                options = [o for o in options if o.stops >= 2]
-            else:
-                options = [o for o in options if o.stops == params.stopsFilter]
-
+        filtered = apply_filters(options, params)
         return {
             "status": "ok",
             "source": "dummy_on_error",
-            "options": [o.dict() for o in options],
+            "options": [o.dict() for o in filtered],
         }
     except Exception as e:
         print("Unexpected error in search_business:", e)
         options = dummy_results(params)
-
-        if params.stopsFilter is not None:
-            if params.stopsFilter == 2:
-                options = [o for o in options if o.stops >= 2]
-            else:
-                options = [o for o in options if o.stops == params.stopsFilter]
-
+        filtered = apply_filters(options, params)
         return {
             "status": "ok",
             "source": "dummy_on_error",
-            "options": [o.dict() for o in options],
+            "options": [o.dict() for o in filtered],
         }
 
 
@@ -599,9 +561,7 @@ class CreditUpdateRequest(BaseModel):
     reason: Optional[str] = None
 
 
-# In memory store for MVP, later you can replace with a database
-USER_WALLETS: Dict[str, int] = {}
-WALLET_HISTORY: Dict[str, List[Dict[str, Any]]] = {}
+USER_WALLETS: dict[str, int] = {}
 
 
 @app.post("/admin/add-credits")
@@ -643,62 +603,11 @@ def admin_add_credits(
             detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
         )
 
-    user_id = payload.userId
-    current = USER_WALLETS.get(user_id, 0)
+    current = USER_WALLETS.get(payload.userId, 0)
     new_balance = max(0, current + change_amount)
-    USER_WALLETS[user_id] = new_balance
-
-    # Log simple history entry
-    history = WALLET_HISTORY.setdefault(user_id, [])
-    history.append(
-        {
-            "date": datetime.utcnow().isoformat(),
-            "description": payload.reason or "Manual credit update",
-            "change": change_amount,
-            "balance_after": new_balance,
-        }
-    )
+    USER_WALLETS[payload.userId] = new_balance
 
     return {
-        "userId": user_id,
+        "userId": payload.userId,
         "newBalance": new_balance,
-    }
-
-
-# ------------- Profile endpoint for wallet display ------------- #
-
-@app.get("/profile")
-def get_profile(x_user_id: Optional[str] = Header(None, alias="X-User-Id")):
-    """
-    Simple MVP profile endpoint.
-
-    Base44 sends the Base44 user id in X-User-Id.
-    We use that as the key in USER_WALLETS and WALLET_HISTORY.
-    """
-
-    user_id = x_user_id or "test-user-1"
-
-    wallet_credits = USER_WALLETS.get(user_id, 0)
-    history = WALLET_HISTORY.get(user_id, [])
-
-    return {
-        "user": {
-            "name": "Flyvo User",
-            "email": "user@example.com",
-            "plan": "BASIC",  # BASIC, PRO, ELITE or null
-        },
-        "subscription": {
-            "plan": "Flyvo Free",
-            "billing_cycle": None,
-            "renewal_date": None,
-            "monthly_credits": 0,
-        },
-        "wallet": {
-            "wallet_credits": wallet_credits,
-            "history": history,
-        },
-        "alerts": {
-            "active_count": 0,
-            "total_count": 0,
-        },
     }
