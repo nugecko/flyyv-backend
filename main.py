@@ -79,12 +79,14 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
         hostname=hostname,
     )
 
-# ------------- Duffel client ------------- #
+# ------------- Duffel clients ------------- #
 
 DUFFEL_ACCESS_TOKEN = os.getenv("DUFFEL_ACCESS_TOKEN")
-duffel = None
-if DUFFEL_ACCESS_TOKEN:
-    duffel = Duffel(access_token=DUFFEL_ACCESS_TOKEN)
+DUFFEL_TEST_ACCESS_TOKEN = os.getenv("DUFFEL_TEST_ACCESS_TOKEN")
+DUFFEL_ALLOW_LIVE_ORDERS = os.getenv("DUFFEL_ALLOW_LIVE_ORDERS", "false").lower() == "true"
+
+duffel = Duffel(access_token=DUFFEL_ACCESS_TOKEN) if DUFFEL_ACCESS_TOKEN else None
+duffel_test = Duffel(access_token=DUFFEL_TEST_ACCESS_TOKEN) if DUFFEL_TEST_ACCESS_TOKEN else None
 
 
 # ------------- Helpers ------------- #
