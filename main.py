@@ -412,8 +412,12 @@ def duffel_test(
         )
         offers_iter = duffel.offers.list(offer_request_id=offer_request.id)
     except Exception as e:
-        print("Duffel error:", e)
-        raise HTTPException(status_code=500, detail="Duffel API error")
+        # Print full error to logs and also return it in the response for now
+        print("Duffel error in /duffel-test:", repr(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Duffel API error: {e}",
+        )
 
     results = []
     for offer in offers_iter:
@@ -426,3 +430,4 @@ def duffel_test(
         })
 
     return {"status": "ok", "source": "duffel", "offers": results}
+
