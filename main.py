@@ -92,7 +92,6 @@ if AMADEUS_API_KEY and AMADEUS_API_SECRET:
 # ------------- Duffel client ------------- #
 
 DUFFEL_ACCESS_TOKEN = os.getenv("DUFFEL_ACCESS_TOKEN")
-
 duffel = Duffel(access_token=DUFFEL_ACCESS_TOKEN) if DUFFEL_ACCESS_TOKEN else None
 
 
@@ -112,39 +111,88 @@ def parse_iso_duration_to_minutes(iso_duration: str) -> int:
     return (days * 24 + hours) * 60 + minutes
 
 
-def dummy_results(params: SearchParams) -> List[FlightOption]:
-    return [
-        FlightOption(
-            id="TK123",
-            airline="Turkish Airlines",
-            airlineCode="TK",
-            price=1299,
-            currency="GBP",
-            departureDate=params.earliestDeparture.isoformat(),
-            returnDate=params.latestDeparture.isoformat(),
-            stops=1,
-            durationMinutes=240,
-            totalDurationMinutes=240,
-            duration="PT4H0M",
-            bookingUrl=AIRLINE_BOOKING_URLS.get("TK"),
-            url=AIRLINE_BOOKING_URLS.get("TK"),
-        ),
-        FlightOption(
-            id="LH456",
-            airline="Lufthansa",
-            airlineCode="LH",
-            price=1550,
-            currency="GBP",
-            departureDate=params.earliestDeparture.isoformat(),
-            returnDate=params.latestDeparture.isoformat(),
-            stops=1,
-            durationMinutes=270,
-            totalDurationMinutes=270,
-            duration="PT4H30M",
-            bookingUrl=AIRLINE_BOOKING_URLS.get("LH"),
-            url=AIRLINE_BOOKING_URLS.get("LH"),
-        ),
+def generate_date_pairs(params: SearchParams, max_pairs: int = 60):
+    """
+    Generate (departure, return) pairs for all valid dates
+    inside the window, respecting minStayDays and maxStayDays.
+    """
+    pairs: List[tuple[date, date]] = []
+
+    # Normalise stay range
+    min_stay = max(1, params.minStayDays)
+    max_stay = max(min_stay, params.maxStayDays)
+
+    stays = list(range(min_stay, max_stay + 1))
+
+    current = params.earliestDeparture
+
+    while current <= params.latestDeparture and len(pairs) < max_pairs:
+        for stay in stays:
+            ret = current + timedelta(days=stay)
+            if ret <= params.latestDeparture:
+                pairs.append((current, ret))
+                if len(pairs) >= max_pairs:
+                    break
+        current += timedelta(days=1)
+
+    return pairs
+
+
+def build_dummy_from_pairs(
+    params: SearchParams,
+    date_pairs: Optional[List[tuple[date, date]]] = None,
+    max_pairs: int = 60,
+) -> List[FlightOption]:
+    """
+    Build dummy options that still respect the date window and stay length.
+
+    Used when Duffel returns no offers or on errors, so that the frontend
+    can still show a full graph across the window.
+    """
+    if not date_pairs:
+        date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
+
+    if not date_pairs:
+        # Last resort, use the whole window
+        date_pairs = [(params.earliestDeparture, params.latestDeparture)]
+
+    options: List[FlightOption] = []
+
+    base_definitions = [
+        ("TK", "Turkish Airlines", 1299.0, 240, "PT4H0M"),
+        ("LH", "Lufthansa", 1550.0, 270, "PT4H30M"),
     ]
+
+    for idx, (dep, ret) in enumerate(date_pairs):
+        code, name, price, duration_minutes, iso_duration = base_definitions[idx % len(base_definitions)]
+        booking_url = AIRLINE_BOOKING_URLS.get(code)
+
+        options.append(
+            FlightOption(
+                id=f"dummy_{code}_{dep.isoformat()}_{ret.isoformat()}",
+                airline=name,
+                airlineCode=code,
+                price=price,
+                currency="GBP",
+                departureDate=dep.isoformat(),
+                returnDate=ret.isoformat(),
+                stops=1,
+                durationMinutes=duration_minutes,
+                totalDurationMinutes=duration_minutes,
+                duration=iso_duration,
+                bookingUrl=booking_url,
+                url=booking_url,
+            )
+        )
+
+    return options
+
+
+def dummy_results(params: SearchParams) -> List[FlightOption]:
+    """
+    Wrapper that creates dummy results across the window.
+    """
+    return build_dummy_from_pairs(params)
 
 
 def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> FlightOption:
@@ -230,33 +278,6 @@ def map_duffel_offer_to_option(offer, dep: date, ret: date, index: int) -> Fligh
     )
 
 
-def generate_date_pairs(params: SearchParams, max_pairs: int = 60):
-    """
-    Generate (departure, return) pairs for all valid dates
-    inside the window, respecting minStayDays and maxStayDays.
-    """
-    pairs: List[tuple[date, date]] = []
-
-    # Normalise stay range
-    min_stay = max(1, params.minStayDays)
-    max_stay = max(min_stay, params.maxStayDays)
-
-    stays = list(range(min_stay, max_stay + 1))
-
-    current = params.earliestDeparture
-
-    while current <= params.latestDeparture and len(pairs) < max_pairs:
-        for stay in stays:
-            ret = current + timedelta(days=stay)
-            if ret <= params.latestDeparture:
-                pairs.append((current, ret))
-                if len(pairs) >= max_pairs:
-                    break
-        current += timedelta(days=1)
-
-    return pairs
-
-
 def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
     """
     Apply price and stops filters, then sort by price.
@@ -305,7 +326,7 @@ def search_business(params: SearchParams):
     No bookings are created, this is search only.
     """
 
-    # If Duffel is not configured, fall back to dummy results
+    # If Duffel is not configured, fall back to dummy results across the window
     if duffel is None:
         options = dummy_results(params)
         filtered = apply_filters(options, params)
@@ -316,11 +337,11 @@ def search_business(params: SearchParams):
         }
 
     try:
-        offers = []
+        offers: List[tuple] = []
 
         date_pairs = generate_date_pairs(params, max_pairs=60)
 
-        # Safety fallback
+        # Safety fallback: if no pairs, we still want something
         if not date_pairs:
             date_pairs = [(params.earliestDeparture, params.latestDeparture)]
 
@@ -353,7 +374,8 @@ def search_business(params: SearchParams):
                 continue
 
         if not offers:
-            options = dummy_results(params)
+            # Use dummy across all date pairs so the graph still has structure
+            options = build_dummy_from_pairs(params, date_pairs=date_pairs)
             filtered = apply_filters(options, params)
             return {
                 "status": "ok",
