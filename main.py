@@ -373,23 +373,21 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
     )
 
 
-def generate_date_pairs(params: SearchParams, max_pairs: int = 20):
+def generate_date_pairs(params: SearchParams, max_pairs: int = 60):
     """
-    Generate (departure, return) pairs within the window.
+    Generate (departure, return) pairs for all valid dates
+    inside the window, respecting minStayDays / maxStayDays.
+
+    This is what powers Flyyv's smart price scanning.
     """
-    stays: List[int] = []
+    pairs: List[tuple[date, date]] = []
 
-    if params.minStayDays == params.maxStayDays:
-        stays = [params.minStayDays]
-    else:
-        for s in (4, 7):
-            if params.minStayDays <= s <= params.maxStayDays:
-                stays.append(s)
+    # Normalise stay range
+    min_stay = max(1, params.minStayDays)
+    max_stay = max(min_stay, params.maxStayDays)
 
-    if not stays:
-        stays = [params.minStayDays]
+    stays = list(range(min_stay, max_stay + 1))
 
-    pairs = []
     current = params.earliestDeparture
 
     while current <= params.latestDeparture and len(pairs) < max_pairs:
@@ -431,7 +429,7 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
 
 @app.get("/")
 def home():
-    return {"message": "Flyvo backend is running"}
+    return {"message": "Flyyv backend is running"}
 
 
 @app.get("/health")
@@ -443,6 +441,11 @@ def health():
 def search_business(params: SearchParams):
     """
     Main endpoint used by the Base44 frontend.
+
+    Behaviour:
+    - Generate all valid (departure, return) date pairs inside the window.
+    - Call Amadeus for each pair and collect offers.
+    - Map to FlightOption, then apply price and stops filters.
     """
 
     # If Amadeus is not configured, return filtered dummy results
@@ -456,57 +459,32 @@ def search_business(params: SearchParams):
         }
 
     try:
-        window_days = (params.latestDeparture - params.earliestDeparture).days + 1
         offers = []
 
-        if window_days <= 1:
-            resp = amadeus.shopping.flight_offers_search.get(
-                originLocationCode=params.origin,
-                destinationLocationCode=params.destination,
-                departureDate=params.earliestDeparture.isoformat(),
-                returnDate=params.latestDeparture.isoformat(),
-                adults=params.passengers,
-                travelClass=params.cabin,
-                currencyCode="GBP",
-                max=20,
-            )
-            offers = resp.data or []
+        date_pairs = generate_date_pairs(params, max_pairs=60)
 
-        elif window_days <= 14:
-            date_pairs = generate_date_pairs(params, max_pairs=20)
-            for dep, ret in date_pairs:
-                try:
-                    resp = amadeus.shopping.flight_offers_search.get(
-                        originLocationCode=params.origin,
-                        destinationLocationCode=params.destination,
-                        departureDate=dep.isoformat(),
-                        returnDate=ret.isoformat(),
-                        adults=params.passengers,
-                        travelClass=params.cabin,
-                        currencyCode="GBP",
-                        max=5,
-                    )
-                    offers.extend(resp.data or [])
-                except ResponseError as e:
-                    print("Amadeus error for", dep, "to", ret, ":", e)
-                    continue
+        # Safety fallback: if for some reason no pairs were generated,
+        # use the original earliest/latest dates.
+        if not date_pairs:
+            date_pairs = [(params.earliestDeparture, params.latestDeparture)]
 
-        else:
-            print(
-                "Date window larger than 14 days, using single Amadeus call "
-                "from earliestDeparture to latestDeparture."
-            )
-            resp = amadeus.shopping.flight_offers_search.get(
-                originLocationCode=params.origin,
-                destinationLocationCode=params.destination,
-                departureDate=params.earliestDeparture.isoformat(),
-                returnDate=params.latestDeparture.isoformat(),
-                adults=params.passengers,
-                travelClass=params.cabin,
-                currencyCode="GBP",
-                max=20,
-            )
-            offers = resp.data or []
+        for idx, (dep, ret) in enumerate(date_pairs):
+            try:
+                resp = amadeus.shopping.flight_offers_search.get(
+                    originLocationCode=params.origin,
+                    destinationLocationCode=params.destination,
+                    departureDate=dep.isoformat(),
+                    returnDate=ret.isoformat(),
+                    adults=params.passengers,
+                    travelClass=params.cabin,
+                    currencyCode="GBP",
+                    max=10,
+                )
+                data = resp.data or []
+                offers.extend(data)
+            except ResponseError as e:
+                print("Amadeus error for", dep, "to", ret, ":", e)
+                continue
 
         if not offers:
             options = dummy_results(params)
