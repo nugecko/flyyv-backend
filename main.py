@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
@@ -62,6 +62,7 @@ app.add_middleware(
 
 
 # ------------- Amadeus client and admin token ------------- #
+# Amadeus is still configured but no longer used in /search-business
 
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
 AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
@@ -138,6 +139,7 @@ def dummy_results(params: SearchParams) -> List[FlightOption]:
 
 
 def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> FlightOption:
+    # Kept for now, in case you ever want to use Amadeus again
     price = float(offer["price"]["grandTotal"])
     currency = offer["price"]["currency"]
 
@@ -171,6 +173,49 @@ def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> Flig
         durationMinutes=duration_minutes,
         totalDurationMinutes=duration_minutes,
         duration=iso_duration,
+        bookingUrl=booking_url,
+        url=booking_url,
+    )
+
+
+def map_duffel_offer_to_option(offer, dep: date, ret: date, index: int) -> FlightOption:
+    """
+    Map a Duffel offer to your FlightOption model.
+    """
+    price = float(offer.total_amount)
+    currency = offer.total_currency
+
+    # Outbound slice is first
+    first_slice = offer.slices[0]
+    outbound_segments = first_slice.segments
+    stops_outbound = len(outbound_segments) - 1
+
+    # Try to compute a rough total duration for outbound
+    try:
+        first_segment = outbound_segments[0]
+        last_segment = outbound_segments[-1]
+        dep_dt = datetime.fromisoformat(first_segment.departing_at)
+        arr_dt = datetime.fromisoformat(last_segment.arriving_at)
+        duration_minutes = int((arr_dt - dep_dt).total_seconds() // 60)
+    except Exception:
+        duration_minutes = 0
+
+    airline_code = offer.owner.iata_code
+    airline_name = AIRLINE_NAMES.get(airline_code, offer.owner.name)
+    booking_url = AIRLINE_BOOKING_URLS.get(airline_code)
+
+    return FlightOption(
+        id=offer.id,  # important for booking later
+        airline=airline_name,
+        airlineCode=airline_code or None,
+        price=price,
+        currency=currency,
+        departureDate=dep.isoformat(),
+        returnDate=ret.isoformat(),
+        stops=stops_outbound,
+        durationMinutes=duration_minutes,
+        totalDurationMinutes=duration_minutes,
+        duration=None,
         bookingUrl=booking_url,
         url=booking_url,
     )
@@ -245,17 +290,17 @@ def search_business(params: SearchParams):
 
     Behaviour:
     - Generate all valid (departure, return) date pairs inside the window.
-    - Call Amadeus for each pair and collect offers.
+    - For each pair, call Duffel for a round trip (two slices).
     - Map to FlightOption, then apply price and stops filters.
     """
 
-    # If Amadeus is not configured, return filtered dummy results
-    if amadeus is None:
+    # If Duffel is not configured, fall back to dummy results
+    if duffel is None:
         options = dummy_results(params)
         filtered = apply_filters(options, params)
         return {
             "status": "ok",
-            "source": "dummy_no_amadeus",
+            "source": "dummy_no_duffel",
             "options": [o.dict() for o in filtered],
         }
 
@@ -264,27 +309,36 @@ def search_business(params: SearchParams):
 
         date_pairs = generate_date_pairs(params, max_pairs=60)
 
-        # Safety fallback: if for some reason no pairs were generated,
-        # use the original earliest/latest dates.
+        # Safety fallback
         if not date_pairs:
             date_pairs = [(params.earliestDeparture, params.latestDeparture)]
 
-        for idx, (dep, ret) in enumerate(date_pairs):
+        for dep, ret in date_pairs:
+            slices = [
+                {
+                    "origin": params.origin,
+                    "destination": params.destination,
+                    "departure_date": dep.isoformat(),
+                },
+                {
+                    "origin": params.destination,
+                    "destination": params.origin,
+                    "departure_date": ret.isoformat(),
+                },
+            ]
+            pax = [{"type": "adult"} for _ in range(params.passengers)]
+
             try:
-                resp = amadeus.shopping.flight_offers_search.get(
-                    originLocationCode=params.origin,
-                    destinationLocationCode=params.destination,
-                    departureDate=dep.isoformat(),
-                    returnDate=ret.isoformat(),
-                    adults=params.passengers,
-                    travelClass=params.cabin,
-                    currencyCode="GBP",
-                    max=10,
+                offer_request = duffel.offer_requests.create(
+                    slices=slices,
+                    cabin_class=params.cabin.lower(),
+                    passengers=pax,
                 )
-                data = resp.data or []
-                offers.extend(data)
-            except ResponseError as e:
-                print("Amadeus error for", dep, "to", ret, ":", e)
+                offers_iter = duffel.offers.list(offer_request_id=offer_request.id)
+                for offer in offers_iter:
+                    offers.append((offer, dep, ret))
+            except Exception as e:
+                print("Duffel error for", dep, "to", ret, ":", e)
                 continue
 
         if not offers:
@@ -292,34 +346,24 @@ def search_business(params: SearchParams):
             filtered = apply_filters(options, params)
             return {
                 "status": "ok",
-                "source": "amadeus_no_results_fallback_dummy",
+                "source": "duffel_no_results_fallback_dummy",
                 "options": [o.dict() for o in filtered],
             }
 
-        mapped = [
-            map_amadeus_offer_to_option(offer, params, i)
-            for i, offer in enumerate(offers)
-        ]
+        mapped: List[FlightOption] = []
+        for idx, (offer, dep, ret) in enumerate(offers):
+            mapped.append(map_duffel_offer_to_option(offer, dep, ret, idx))
 
         filtered = apply_filters(mapped, params)
 
         return {
             "status": "ok",
-            "source": "amadeus",
+            "source": "duffel",
             "options": [o.dict() for o in filtered],
         }
 
-    except ResponseError as e:
-        print("Amadeus API error:", e)
-        options = dummy_results(params)
-        filtered = apply_filters(options, params)
-        return {
-            "status": "ok",
-            "source": "dummy_on_error",
-            "options": [o.dict() for o in filtered],
-        }
     except Exception as e:
-        print("Unexpected error in search_business:", e)
+        print("Unexpected error in search_business with Duffel:", e)
         options = dummy_results(params)
         filtered = apply_filters(options, params)
         return {
