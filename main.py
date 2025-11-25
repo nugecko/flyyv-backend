@@ -1,12 +1,37 @@
 import os
-import re
-from datetime import date, timedelta
-from typing import List, Optional
+from datetime import date, datetime, timedelta
+from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from amadeus import Client, ResponseError
+from duffel_api import Duffel
+
+
+# ------------- Environment and clients ------------- #
+
+AMADEUS_API_KEY = os.environ.get("AMADEUS_API_KEY")
+AMADEUS_API_SECRET = os.environ.get("AMADEUS_API_SECRET")
+AMADEUS_ENV = os.environ.get("AMADEUS_ENV", "test")
+
+if not AMADEUS_API_KEY or not AMADEUS_API_SECRET:
+    print("Warning: Amadeus credentials are not fully set")
+
+amadeus = Client(
+    client_id=AMADEUS_API_KEY,
+    client_secret=AMADEUS_API_SECRET,
+    hostname="test" if AMADEUS_ENV == "test" else "production",
+)
+
+DUFFEL_ACCESS_TOKEN = os.environ.get("DUFFEL_ACCESS_TOKEN")
+
+if not DUFFEL_ACCESS_TOKEN:
+    print("Warning: DUFFEL_ACCESS_TOKEN is not set")
+
+duffel = Duffel(access_token=DUFFEL_ACCESS_TOKEN)
+
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
 
 
 # ------------- Models ------------- #
@@ -22,27 +47,51 @@ class SearchParams(BaseModel):
     maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
-    # Optional filter for number of stops, for example [0] or [0,1,2]
-    # 3 is treated as "3 or more stops"
-    stopsFilter: Optional[List[int]] = None
+    # "flexible" = window scanning, "fixed" = one off search
+    searchMode: Optional[str] = "flexible"
+    # For later, for example ["duffel", "amadeus"]
+    providers: Optional[List[str]] = None
 
 
 class FlightOption(BaseModel):
-    id: str
+    id: str                  # internal id
+    provider: str            # "amadeus" or "duffel"
+    providerOfferId: str     # id from provider
     airline: str
     airlineCode: Optional[str] = None
     price: float
     currency: str
-    departureDate: str
-    returnDate: str
+    departure: datetime
+    arrival: datetime
     stops: int
-
-    durationMinutes: int
-    totalDurationMinutes: Optional[int] = None
-    duration: Optional[str] = None
-
     bookingUrl: Optional[str] = None
-    url: Optional[str] = None
+
+
+class CreditUpdateRequest(BaseModel):
+    userId: str
+    amount: int  # positive or negative
+
+
+class CreditBalanceResponse(BaseModel):
+    userId: str
+    newBalance: int
+
+
+# ------------- Simple in memory credit store (Option A) ------------- #
+
+user_balances: Dict[str, int] = {}
+
+
+def get_user_balance(user_id: str) -> int:
+    return user_balances.get(user_id, 0)
+
+
+def update_user_balance(user_id: str, delta: int) -> int:
+    new_balance = get_user_balance(user_id) + delta
+    if new_balance < 0:
+        new_balance = 0
+    user_balances[user_id] = new_balance
+    return new_balance
 
 
 # ------------- FastAPI app ------------- #
@@ -51,541 +100,251 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later you can restrict this to your Base44 domains
+    allow_origins=["*"],      # you can tighten this later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ------------- Amadeus client and admin token ------------- #
+# ------------- Helper functions ------------- #
 
-AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
-AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
-AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")
-ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
-
-hostname = "production" if AMADEUS_ENV and AMADEUS_ENV.lower() == "production" else "test"
-
-amadeus = None
-if AMADEUS_API_KEY and AMADEUS_API_SECRET:
-    amadeus = Client(
-        client_id=AMADEUS_API_KEY,
-        client_secret=AMADEUS_API_SECRET,
-        hostname=hostname,
-    )
-
-
-# ------------- Airline maps ------------- #
-
-AIRLINE_NAMES = {
-    # Europe
-    "LH": "Lufthansa",
-    "BA": "British Airways",
-    "AF": "Air France",
-    "KL": "KLM",
-    "LX": "SWISS",
-    "SN": "Brussels Airlines",
-    "OS": "Austrian Airlines",
-    "SK": "Scandinavian Airlines",
-    "AZ": "ITA Airways",
-    "LO": "LOT Polish Airlines",
-    "TP": "TAP Air Portugal",
-    "IB": "Iberia",
-    "VY": "Vueling",
-    "U2": "easyJet",
-    "FR": "Ryanair",
-    "W6": "Wizz Air",
-    "EI": "Aer Lingus",
-    "AY": "Finnair",
-    "BT": "airBaltic",
-    "OK": "Czech Airlines",
-    "RO": "TAROM",
-    "JU": "Air Serbia",
-    "FB": "Bulgaria Air",
-    "HV": "Transavia",
-    "DS": "easyJet Switzerland",
-    "A3": "Aegean Airlines",
-    "TK": "Turkish Airlines",
-    "LG": "Luxair",
-    "X3": "TUIfly",
-    "LS": "Jet2",
-    "VS": "Virgin Atlantic",
-    # Middle East
-    "LY": "El Al",
-    "EK": "Emirates",
-    "QR": "Qatar Airways",
-    "EY": "Etihad Airways",
-    "SV": "Saudia",
-    "RJ": "Royal Jordanian",
-    "WY": "Oman Air",
-    "GF": "Gulf Air",
-    "ME": "Middle East Airlines",
-    # North America
-    "AA": "American Airlines",
-    "DL": "Delta Air Lines",
-    "UA": "United Airlines",
-    "B6": "JetBlue Airways",
-    "WS": "WestJet",
-    "AC": "Air Canada",
-    "F9": "Frontier Airlines",
-    "NK": "Spirit Airlines",
-    "AS": "Alaska Airlines",
-    "HA": "Hawaiian Airlines",
-    # Latin America
-    "LA": "LATAM Airlines",
-    "AV": "Avianca",
-    "AM": "Aeromexico",
-    "CM": "Copa Airlines",
-    "G3": "Gol Linhas Aéreas",
-    "UX": "Air Europa",
-    # Asia
-    "SQ": "Singapore Airlines",
-    "CX": "Cathay Pacific",
-    "JL": "Japan Airlines",
-    "NH": "ANA All Nippon Airways",
-    "KE": "Korean Air",
-    "OZ": "Asiana Airlines",
-    "CI": "China Airlines",
-    "BR": "EVA Air",
-    "MU": "China Eastern Airlines",
-    "CA": "Air China",
-    "CZ": "China Southern Airlines",
-    "HX": "Hong Kong Airlines",
-    "TG": "Thai Airways",
-    "VN": "Vietnam Airlines",
-    "MH": "Malaysia Airlines",
-    "GA": "Garuda Indonesia",
-    "PR": "Philippine Airlines",
-    "AI": "Air India",
-    "UK": "Vistara",
-    "6E": "IndiGo",
-    "SG": "SpiceJet",
-    "TR": "Scoot",
-    "D7": "AirAsia X",
-    "AK": "AirAsia",
-    # Oceania
-    "QF": "Qantas",
-    "NZ": "Air New Zealand",
-    "VA": "Virgin Australia",
-    "JQ": "Jetstar",
-    # Africa
-    "ET": "Ethiopian Airlines",
-    "KQ": "Kenya Airways",
-    "MS": "EgyptAir",
-    "AT": "Royal Air Maroc",
-    "TU": "Tunisair",
-    "SA": "South African Airways",
-    "HM": "Air Seychelles",
-    "WB": "RwandAir",
-    # Low cost and regional
-    "XR": "Corendon Airlines",
-    "XQ": "SunExpress",
-    "PC": "Pegasus Airlines",
-}
-
-AIRLINE_BOOKING_URLS = {
-    "LH": "https://www.lufthansa.com/gb/en/flight-search",
-    "BA": "https://www.britishairways.com/travel/home/public/en_gb",
-    "AF": "https://wwws.airfrance.co.uk/",
-    "KL": "https://www.klm.co.uk/",
-    "LX": "https://www.swiss.com/gb/en/homepage",
-    "SN": "https://www.brusselsairlines.com/",
-    "OS": "https://www.austrian.com/",
-    "SK": "https://www.flysas.com/en/",
-    "AZ": "https://www.ita-airways.com/en_gb",
-    "LO": "https://www.lot.com/gb/en",
-    "TP": "https://www.flytap.com/en-gb/",
-    "IB": "https://www.iberia.com/gb/",
-    "VY": "https://www.vueling.com/en",
-    "U2": "https://www.easyjet.com/en",
-    "FR": "https://www.ryanair.com/gb/en",
-    "W6": "https://wizzair.com/",
-    "EI": "https://www.aerlingus.com/",
-    "AY": "https://www.finnair.com/",
-    "BT": "https://www.airbaltic.com/en/",
-    "OK": "https://www.csa.cz/en/",
-    "RO": "https://www.tarom.ro/en",
-    "JU": "https://www.airserbia.com/en",
-    "FB": "https://www.air.bg/en",
-    "HV": "https://www.transavia.com/en-UK/home/",
-    "DS": "https://www.easyjet.com/en",
-    "A3": "https://en.aegeanair.com/",
-    "TK": "https://www.turkishairlines.com/en-int/flights/",
-    "LG": "https://www.luxair.lu/en",
-    "X3": "https://www.tuifly.com/",
-    "LS": "https://www.jet2.com/",
-    "VS": "https://www.virginatlantic.com/",
-    "LY": "https://www.elal.com/en/",
-    "EK": "https://www.emirates.com/uk/english/",
-    "QR": "https://www.qatarairways.com/en-gb/homepage.html",
-    "EY": "https://www.etihad.com/en-gb/",
-    "SV": "https://www.saudia.com/",
-    "RJ": "https://www.rj.com/",
-    "WY": "https://www.omanair.com/",
-    "GF": "https://www.gulfair.com/",
-    "ME": "https://www.mea.com.lb/english",
-    "AA": "https://www.aa.com/",
-    "DL": "https://www.delta.com/",
-    "UA": "https://www.united.com/",
-    "B6": "https://www.jetblue.com/",
-    "WS": "https://www.westjet.com/",
-    "AC": "https://www.aircanada.com/",
-    "F9": "https://www.flyfrontier.com/",
-    "NK": "https://www.spirit.com/",
-    "AS": "https://www.alaskaair.com/",
-    "HA": "https://www.hawaiianairlines.com/",
-    "LA": "https://www.latamairlines.com/",
-    "AV": "https://www.avianca.com/",
-    "AM": "https://aeromexico.com/en-gb",
-    "CM": "https://www.copaair.com/",
-    "G3": "https://www.voegol.com.br/en",
-    "UX": "https://www.aireuropa.com/",
-    "SQ": "https://www.singaporeair.com/",
-    "CX": "https://www.cathaypacific.com/",
-    "JL": "https://www.jal.co.jp/jp/en/",
-    "NH": "https://www.ana.co.jp/en/jp/",
-    "KE": "https://www.koreanair.com/",
-    "OZ": "https://flyasiana.com/",
-    "CI": "https://www.china-airlines.com/",
-    "BR": "https://www.evaair.com/",
-    "MU": "https://www.ceair.com/",
-    "CA": "https://www.airchina.com/",
-    "CZ": "https://www.csair.com/",
-    "HX": "https://www.hongkongairlines.com/",
-    "TG": "https://www.thaiairways.com/",
-    "VN": "https://www.vietnamairlines.com/",
-    "MH": "https://www.malaysiaairlines.com/",
-    "GA": "https://www.garuda-indonesia.com/",
-    "PR": "https://www.philippineairlines.com/",
-    "AI": "https://www.airindia.com/",
-    "UK": "https://www.airvistara.com/",
-    "6E": "https://www.goindigo.in/",
-    "SG": "https://www.spicejet.com/",
-    "TR": "https://www.flyscoot.com/",
-    "D7": "https://www.airasia.com/",
-    "AK": "https://www.airasia.com/",
-    "QF": "https://www.qantas.com/",
-    "NZ": "https://www.airnewzealand.co.uk/",
-    "VA": "https://www.virginaustralia.com/",
-    "JQ": "https://www.jetstar.com/",
-    "ET": "https://www.ethiopianairlines.com/",
-    "KQ": "https://www.kenya-airways.com/",
-    "MS": "https://www.egyptair.com/",
-    "AT": "https://www.royalairmaroc.com/",
-    "TU": "https://www.tunisair.com/",
-    "SA": "https://www.flysaa.com/",
-    "HM": "https://www.airseychelles.com/",
-    "WB": "https://www.rwandair.com/",
-    "XR": "https://www.corendonairlines.com/",
-    "XQ": "https://www.sunexpress.com/en/",
-    "PC": "https://www.flypgs.com/en",
-}
-
-
-# ------------- Helpers ------------- #
-
-def parse_iso_duration_to_minutes(iso_duration: str) -> int:
-    if not iso_duration:
-        return 0
-    pattern = r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?"
-    match = re.match(pattern, iso_duration)
-    if not match:
-        return 0
-    days_str, hours_str, minutes_str = match.groups()
-    days = int(days_str) if days_str else 0
-    hours = int(hours_str) if hours_str else 0
-    minutes = int(minutes_str) if minutes_str else 0
-    return (days * 24 + hours) * 60 + minutes
-
-
-def dummy_results(params: SearchParams) -> List[FlightOption]:
-    return [
-        FlightOption(
-            id="TK123",
-            airline="Turkish Airlines",
-            airlineCode="TK",
-            price=1299,
-            currency="GBP",
-            departureDate=params.earliestDeparture.isoformat(),
-            returnDate=params.latestDeparture.isoformat(),
-            stops=1,
-            durationMinutes=240,
-            totalDurationMinutes=240,
-            duration="PT4H0M",
-            bookingUrl=AIRLINE_BOOKING_URLS.get("TK"),
-            url=AIRLINE_BOOKING_URLS.get("TK"),
-        ),
-        FlightOption(
-            id="LH456",
-            airline="Lufthansa",
-            airlineCode="LH",
-            price=1550,
-            currency="GBP",
-            departureDate=params.earliestDeparture.isoformat(),
-            returnDate=params.latestDeparture.isoformat(),
-            stops=1,
-            durationMinutes=270,
-            totalDurationMinutes=270,
-            duration="PT4H30M",
-            bookingUrl=AIRLINE_BOOKING_URLS.get("LH"),
-            url=AIRLINE_BOOKING_URLS.get("LH"),
-        ),
-    ]
-
-
-def map_amadeus_offer_to_option(offer, params: SearchParams, index: int) -> FlightOption:
-    price = float(offer["price"]["grandTotal"])
-    currency = offer["price"]["currency"]
-
-    first_itinerary = offer["itineraries"][0]
-    last_itinerary = offer["itineraries"][-1]
-
-    departure_date = first_itinerary["segments"][0]["departure"]["at"][:10]
-    return_date = last_itinerary["segments"][-1]["arrival"]["at"][:10]
-
-    airline_code = ""
-    if "validatingAirlineCodes" in offer and offer["validatingAirlineCodes"]:
-        airline_code = offer["validatingAirlineCodes"][0]
-
-    airline_name = AIRLINE_NAMES.get(airline_code, airline_code or "Airline")
-    booking_url = AIRLINE_BOOKING_URLS.get(airline_code)
-
-    iso_duration = first_itinerary.get("duration", "PT0H0M")
-    duration_minutes = parse_iso_duration_to_minutes(iso_duration)
-
-    stops_outbound = len(first_itinerary["segments"]) - 1
-
-    return FlightOption(
-        id=f"offer_{index}",
-        airline=airline_name,
-        airlineCode=airline_code or None,
-        price=price,
-        currency=currency,
-        departureDate=departure_date,
-        returnDate=return_date,
-        stops=stops_outbound,
-        durationMinutes=duration_minutes,
-        totalDurationMinutes=duration_minutes,
-        duration=iso_duration,
-        bookingUrl=booking_url,
-        url=booking_url,
-    )
-
-
-def generate_date_pairs(params: SearchParams, max_pairs: int = 60):
-    """
-    Generate (departure, return) pairs for all valid dates
-    inside the window, respecting minStayDays / maxStayDays.
-
-    This is what powers Flyyv's smart price scanning.
-    """
-    pairs: List[tuple[date, date]] = []
-
-    # Normalise stay range
-    min_stay = max(1, params.minStayDays)
-    max_stay = max(min_stay, params.maxStayDays)
-
-    stays = list(range(min_stay, max_stay + 1))
-
-    current = params.earliestDeparture
-
-    while current <= params.latestDeparture and len(pairs) < max_pairs:
-        for stay in stays:
-            ret = current + timedelta(days=stay)
-            if ret <= params.latestDeparture:
-                pairs.append((current, ret))
-                if len(pairs) >= max_pairs:
-                    break
+def daterange(start: date, end: date):
+    current = start
+    while current <= end:
+        yield current
         current += timedelta(days=1)
 
-    return pairs
 
-
-def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
-    """
-    Apply price and stops filters, then sort by price.
-    """
-    filtered = list(options)
-
-    # Price filter
-    if params.maxPrice is not None and params.maxPrice > 0:
-        filtered = [o for o in filtered if o.price <= params.maxPrice]
-
-    # Stops filter, values like [0], [0, 1], [0, 1, 2], [2, 3] etc
-    if params.stopsFilter:
-        allowed = set(params.stopsFilter)
-        if 3 in allowed:
-            # 3 means "3 or more stops"
-            filtered = [o for o in filtered if (o.stops in allowed or o.stops >= 3)]
-        else:
-            filtered = [o for o in filtered if o.stops in allowed]
-
-    filtered.sort(key=lambda x: x.price)
-    return filtered
-
-
-# ------------- Routes: health and search ------------- #
-
-@app.get("/")
-def home():
-    return {"message": "Flyyv backend is running"}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/search-business")
-def search_business(params: SearchParams):
-    """
-    Main endpoint used by the Base44 frontend.
-
-    Behaviour:
-    - Generate all valid (departure, return) date pairs inside the window.
-    - Call Amadeus for each pair and collect offers.
-    - Map to FlightOption, then apply price and stops filters.
-    """
-
-    # If Amadeus is not configured, return filtered dummy results
-    if amadeus is None:
-        options = dummy_results(params)
-        filtered = apply_filters(options, params)
-        return {
-            "status": "ok",
-            "source": "dummy_no_amadeus",
-            "options": [o.dict() for o in filtered],
-        }
-
+def search_amadeus_one_way(
+    origin: str,
+    destination: str,
+    departure_date: date,
+    cabin: str,
+    passengers: int,
+) -> List[FlightOption]:
     try:
-        offers = []
+        response = amadeus.shopping.flight_offers_search.get(
+            originLocationCode=origin,
+            destinationLocationCode=destination,
+            departureDate=departure_date.isoformat(),
+            adults=passengers,
+            travelClass=cabin,
+            currencyCode="GBP",
+            max=50,
+        )
+    except ResponseError as error:
+        print(f"Amadeus error: {error}")
+        return []
 
-        date_pairs = generate_date_pairs(params, max_pairs=60)
+    offers: List[FlightOption] = []
+    data = response.data
 
-        # Safety fallback: if for some reason no pairs were generated,
-        # use the original earliest/latest dates.
-        if not date_pairs:
-            date_pairs = [(params.earliestDeparture, params.latestDeparture)]
+    for idx, offer in enumerate(data):
+        price = float(offer["price"]["grandTotal"])
+        currency = offer["price"]["currency"]
 
-        for idx, (dep, ret) in enumerate(date_pairs):
-            try:
-                resp = amadeus.shopping.flight_offers_search.get(
-                    originLocationCode=params.origin,
-                    destinationLocationCode=params.destination,
-                    departureDate=dep.isoformat(),
-                    returnDate=ret.isoformat(),
-                    adults=params.passengers,
-                    travelClass=params.cabin,
-                    currencyCode="GBP",
-                    max=10,
-                )
-                data = resp.data or []
-                offers.extend(data)
-            except ResponseError as e:
-                print("Amadeus error for", dep, "to", ret, ":", e)
-                continue
+        itinerary = offer["itineraries"][0]
+        segments = itinerary["segments"]
+        stops = len(segments) - 1
 
-        if not offers:
-            options = dummy_results(params)
-            filtered = apply_filters(options, params)
-            return {
-                "status": "ok",
-                "source": "amadeus_no_results_fallback_dummy",
-                "options": [o.dict() for o in filtered],
-            }
+        first_segment = segments[0]
+        last_segment = segments[-1]
 
-        mapped = [
-            map_amadeus_offer_to_option(offer, params, i)
-            for i, offer in enumerate(offers)
-        ]
+        departure_dt = datetime.fromisoformat(first_segment["departure"]["at"])
+        arrival_dt = datetime.fromisoformat(last_segment["arrival"]["at"])
 
-        filtered = apply_filters(mapped, params)
+        carrier_code = first_segment["carrierCode"]
+        airline_name = carrier_code
 
-        return {
-            "status": "ok",
-            "source": "amadeus",
-            "options": [o.dict() for o in filtered],
-        }
-
-    except ResponseError as e:
-        print("Amadeus API error:", e)
-        options = dummy_results(params)
-        filtered = apply_filters(options, params)
-        return {
-            "status": "ok",
-            "source": "dummy_on_error",
-            "options": [o.dict() for o in filtered],
-        }
-    except Exception as e:
-        print("Unexpected error in search_business:", e)
-        options = dummy_results(params)
-        filtered = apply_filters(options, params)
-        return {
-            "status": "ok",
-            "source": "dummy_on_error",
-            "options": [o.dict() for o in filtered],
-        }
-
-
-# ------------- Admin credits endpoint ------------- #
-
-class CreditUpdateRequest(BaseModel):
-    userId: str
-    amount: Optional[int] = None
-    delta: Optional[int] = None
-    creditAmount: Optional[int] = None
-    value: Optional[int] = None
-    reason: Optional[str] = None
-
-
-USER_WALLETS: dict[str, int] = {}
-
-
-@app.post("/admin/add-credits")
-def admin_add_credits(
-    payload: CreditUpdateRequest,
-    x_admin_token: str = Header(None, alias="X-Admin-Token"),
-):
-    # Debug logging for token mismatch investigation
-    print("DEBUG_received_token:", repr(x_admin_token))
-    print("DEBUG_expected_token:", repr(ADMIN_API_TOKEN))
-
-    # Normalise values
-    received = (x_admin_token or "").strip()
-    expected = (ADMIN_API_TOKEN or "").strip()
-
-    if received.lower().startswith("bearer "):
-        received = received[7:].strip()
-
-    if expected == "":
-        raise HTTPException(status_code=500, detail="Admin token not configured")
-
-    if received != expected:
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-
-    # Accept any field name for the credit change
-    change_amount = (
-        payload.delta
-        if payload.delta is not None
-        else payload.amount
-        if payload.amount is not None
-        else payload.creditAmount
-        if payload.creditAmount is not None
-        else payload.value
-    )
-
-    if change_amount is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
+        offers.append(
+            FlightOption(
+                id=f"amadeus_{idx}",
+                provider="amadeus",
+                providerOfferId=offer["id"],
+                airline=airline_name,
+                airlineCode=carrier_code,
+                price=price,
+                currency=currency,
+                departure=departure_dt,
+                arrival=arrival_dt,
+                stops=stops,
+                bookingUrl=None,
+            )
         )
 
-    current = USER_WALLETS.get(payload.userId, 0)
-    new_balance = max(0, current + change_amount)
-    USER_WALLETS[payload.userId] = new_balance
+    return offers
 
-    return {
-        "userId": payload.userId,
-        "newBalance": new_balance,
-    }
+
+def search_duffel_one_way(
+    origin: str,
+    destination: str,
+    departure_date: date,
+    cabin: str,
+    passengers: int,
+) -> List[FlightOption]:
+    if not DUFFEL_ACCESS_TOKEN:
+        return []
+
+    slices = [{
+        "origin": origin,
+        "destination": destination,
+        "departure_date": departure_date.isoformat(),
+    }]
+    pax = [{"type": "adult"} for _ in range(passengers)]
+
+    try:
+        offer_request = duffel.offer_requests.create(
+            slices=slices,
+            cabin_class=cabin.lower(),
+            passengers=pax,
+        )
+        offers_iter = duffel.offers.list(offer_request_id=offer_request.id)
+    except Exception as e:
+        print(f"Duffel error: {e}")
+        return []
+
+    offers: List[FlightOption] = []
+
+    for idx, offer in enumerate(offers_iter):
+        price = float(offer.total_amount)
+        currency = offer.total_currency
+
+        first_slice = offer.slices[0]
+        segments = first_slice.segments
+        stops = len(segments) - 1
+
+        first_segment = segments[0]
+        last_segment = segments[-1]
+
+        departure_dt = datetime.fromisoformat(first_segment.departing_at)
+        arrival_dt = datetime.fromisoformat(last_segment.arriving_at)
+
+        owner = offer.owner
+
+        offers.append(
+            FlightOption(
+                id=f"duffel_{idx}",
+                provider="duffel",
+                providerOfferId=offer.id,
+                airline=owner.name,
+                airlineCode=owner.iata_code,
+                price=price,
+                currency=currency,
+                departure=departure_dt,
+                arrival=arrival_dt,
+                stops=stops,
+                bookingUrl=None,
+            )
+        )
+
+    return offers
+
+
+def apply_price_filter(
+    offers: List[FlightOption], max_price: Optional[float]
+) -> List[FlightOption]:
+    if max_price is None:
+        return offers
+    return [o for o in offers if o.price <= max_price]
+
+
+# ------------- Routes ------------- #
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Flyvo backend running"}
+
+
+@app.post("/search", response_model=List[FlightOption])
+def search_flights(params: SearchParams):
+    """
+    Simple search:
+    if searchMode == "fixed" it will only search on earliestDeparture date
+    if searchMode == "flexible" it will search the whole window between earliest and latest
+    for each departure date it searches one way and returns all combined results
+    """
+
+    providers = params.providers or ["amadeus", "duffel"]
+
+    all_offers: List[FlightOption] = []
+
+    if params.searchMode == "fixed":
+        dates_to_check = [params.earliestDeparture]
+    else:
+        dates_to_check = list(daterange(params.earliestDeparture, params.latestDeparture))
+
+    for dep_date in dates_to_check:
+        if "amadeus" in providers:
+            all_offers.extend(
+                search_amadeus_one_way(
+                    origin=params.origin,
+                    destination=params.destination,
+                    departure_date=dep_date,
+                    cabin=params.cabin,
+                    passengers=params.passengers,
+                )
+            )
+        if "duffel" in providers:
+            all_offers.extend(
+                search_duffel_one_way(
+                    origin=params.origin,
+                    destination=params.destination,
+                    departure_date=dep_date,
+                    cabin=params.cabin,
+                    passengers=params.passengers,
+                )
+            )
+
+    all_offers = apply_price_filter(all_offers, params.maxPrice)
+    all_offers.sort(key=lambda o: o.price)
+
+    return all_offers
+
+
+@app.get("/duffel-test")
+def duffel_test(
+    origin: str,
+    destination: str,
+    departure: date,
+    passengers: int = 1,
+):
+    """
+    Simple testing endpoint for Duffel only.
+    """
+
+    offers = search_duffel_one_way(
+        origin=origin,
+        destination=destination,
+        departure_date=departure,
+        cabin="business",
+        passengers=passengers,
+    )
+    return {"offers": offers}
+
+
+@app.post("/admin/update-credits", response_model=CreditBalanceResponse)
+def admin_update_credits(
+    payload: CreditUpdateRequest,
+    x_admin_token: str = Header(..., alias="X-Admin-Token"),
+):
+    """
+    Admin endpoint used by Base44 tool.
+    Updates the balance for a given user by the requested amount.
+    """
+
+    if not ADMIN_API_TOKEN or x_admin_token != ADMIN_API_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    new_balance = update_user_balance(payload.userId, payload.amount)
+    return CreditBalanceResponse(userId=payload.userId, newBalance=new_balance)
+
+
+@app.get("/balance/{user_id}", response_model=CreditBalanceResponse)
+def get_balance(user_id: str):
+    """
+    Returns current balance for a user.
+    """
+
+    balance = get_user_balance(user_id)
+    return CreditBalanceResponse(userId=user_id, newBalance=balance)
