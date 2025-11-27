@@ -23,9 +23,14 @@ class SearchParams(BaseModel):
     maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
-    # Optional filter for number of stops, for example [0] or [0, 1, 2]
+    # Optional filter for number of stops, for example [0, 1, 2]
     # 3 is treated as "3 or more stops"
     stopsFilter: Optional[List[int]] = None
+
+    # Optional tuning parameters from the Admin "Search Tuning" tab
+    maxOffersPerPair: Optional[int] = None
+    maxOffersTotal: Optional[int] = None
+    maxDatePairs: Optional[int] = None
 
 
 class FlightOption(BaseModel):
@@ -98,18 +103,21 @@ def duffel_headers() -> dict:
     }
 
 
-def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple[date, date]]:
+def generate_date_pairs(params: SearchParams, max_pairs: int = 30) -> List[Tuple[date, date]]:
     """
     Generate (departure, return) pairs across the window,
     respecting minStayDays and maxStayDays.
+    max_pairs is a hard cap that protects performance and API usage.
     """
     pairs: List[Tuple[date, date]] = []
 
     min_stay = max(1, params.minStayDays)
     max_stay = max(min_stay, params.maxStayDays)
-
     stays = list(range(min_stay, max_stay + 1))
-    current = params.earliestDeparture
+
+    today = date.today()
+    # Never search in the past
+    current = max(params.earliestDeparture, today)
 
     while current <= params.latestDeparture and len(pairs) < max_pairs:
         for stay in stays:
@@ -307,10 +315,7 @@ def search_business(params: SearchParams):
     - For each pair, call Duffel for a round trip (two slices).
     - Limit offers per date pair and overall to protect the server.
     - Map to FlightOption, then apply price and stops filters.
-
-    No bookings are created, this is search only.
     """
-
     if not DUFFEL_ACCESS_TOKEN:
         return {
             "status": "error",
@@ -318,17 +323,24 @@ def search_business(params: SearchParams):
             "options": [],
         }
 
-    date_pairs = generate_date_pairs(params, max_pairs=60)
+    started_at = datetime.utcnow()
+
+    # Limits from tuning tab, clamped to safe values
+    client_max_pairs = params.maxDatePairs or 20
+    client_max_offers_per_pair = params.maxOffersPerPair or 50
+    client_max_offers_total = params.maxOffersTotal or 5000
+
+    MAX_DATE_PAIRS = max(5, min(client_max_pairs, 60))
+    MAX_OFFERS_PER_PAIR = max(10, min(client_max_offers_per_pair, 200))
+    MAX_OFFERS_TOTAL = max(500, min(client_max_offers_total, 5000))
+
+    date_pairs = generate_date_pairs(params, max_pairs=MAX_DATE_PAIRS)
     if not date_pairs:
         return {
             "status": "ok",
             "source": "no_date_pairs",
             "options": [],
         }
-
-    # Limits to protect the instance
-    MAX_OFFERS_PER_PAIR = 50
-    MAX_OFFERS_TOTAL = 5000
 
     collected_offers: List[Tuple[dict, date, date]] = []
     total_count = 0
@@ -373,6 +385,12 @@ def search_business(params: SearchParams):
                 break
 
     if not collected_offers:
+        duration = (datetime.utcnow() - started_at).total_seconds()
+        print(
+            f"search_business took {duration:.1f}s, "
+            f"pairs={len(date_pairs)}, offers_collected=0, filtered=0, "
+            f"source=duffel_no_results"
+        )
         return {
             "status": "ok",
             "source": "duffel_no_results",
@@ -385,6 +403,16 @@ def search_business(params: SearchParams):
     ]
 
     filtered = apply_filters(mapped, params)
+
+    duration = (datetime.utcnow() - started_at).total_seconds()
+    print(
+        f"search_business took {duration:.1f}s, "
+        f"pairs={len(date_pairs)}, offers_collected={len(collected_offers)}, "
+        f"filtered={len(filtered)}, "
+        f"max_pairs={MAX_DATE_PAIRS}, "
+        f"max_offers_per_pair={MAX_OFFERS_PER_PAIR}, "
+        f"max_offers_total={MAX_OFFERS_TOTAL}"
+    )
 
     return {
         "status": "ok",
@@ -458,7 +486,6 @@ def duffel_test(
     Uses whatever DUFFEL_ACCESS_TOKEN is configured (test or live).
     No bookings are created.
     """
-
     if not DUFFEL_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="Duffel not configured")
 
