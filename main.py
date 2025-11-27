@@ -27,7 +27,7 @@ class SearchParams(BaseModel):
     # 3 is treated as "3 or more stops"
     stopsFilter: Optional[List[int]] = None
 
-    # Optional tuning parameters from the Admin "Search Tuning" tab
+    # Optional tuning parameters from the Admin Search Tuning tab
     maxOffersPerPair: Optional[int] = None
     maxOffersTotal: Optional[int] = None
     maxDatePairs: Optional[int] = None
@@ -47,7 +47,7 @@ class FlightOption(BaseModel):
     totalDurationMinutes: Optional[int] = None
     duration: Optional[str] = None
 
-    # New fields for Base44 filtering
+    # For Base44 filtering
     origin: Optional[str] = None              # origin IATA code, for example LHR
     destination: Optional[str] = None         # destination IATA code, for example TLV
     originAirport: Optional[str] = None       # full origin airport name
@@ -293,6 +293,34 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
     return filtered
 
 
+def limit_per_airline(
+    options: List[FlightOption],
+    max_per_airline: int = 50,
+    min_airlines_for_limit: int = 4,
+) -> List[FlightOption]:
+    """
+    Limit the number of results per airline while keeping price order.
+
+    If there are fewer than min_airlines_for_limit distinct airlines,
+    the list is returned unchanged.
+    """
+    airline_keys = {o.airlineCode or o.airline for o in options}
+    if len(airline_keys) < min_airlines_for_limit:
+        return options
+
+    counts: dict[str, int] = {}
+    balanced: List[FlightOption] = []
+
+    for opt in options:
+        key = opt.airlineCode or opt.airline
+        current = counts.get(key, 0)
+        if current < max_per_airline:
+            balanced.append(opt)
+            counts[key] = current + 1
+
+    return balanced
+
+
 # ------------- Routes: health and search ------------- #
 
 @app.get("/")
@@ -314,7 +342,7 @@ def search_business(params: SearchParams):
     - Generate all valid (departure, return) date pairs across the window.
     - For each pair, call Duffel for a round trip (two slices).
     - Limit offers per date pair and overall to protect the server.
-    - Map to FlightOption, then apply price and stops filters.
+    - Map to FlightOption, then apply price, stops and per airline filters.
     """
     if not DUFFEL_ACCESS_TOKEN:
         return {
@@ -389,7 +417,7 @@ def search_business(params: SearchParams):
         print(
             f"search_business took {duration:.1f}s, "
             f"pairs={len(date_pairs)}, offers_collected=0, filtered=0, "
-            f"source=duffel_no_results"
+            f"balanced=0, source=duffel_no_results"
         )
         return {
             "status": "ok",
@@ -404,11 +432,14 @@ def search_business(params: SearchParams):
 
     filtered = apply_filters(mapped, params)
 
+    # Per airline balancing: only kicks in when there are at least 4 airlines
+    balanced = limit_per_airline(filtered, max_per_airline=50, min_airlines_for_limit=4)
+
     duration = (datetime.utcnow() - started_at).total_seconds()
     print(
         f"search_business took {duration:.1f}s, "
         f"pairs={len(date_pairs)}, offers_collected={len(collected_offers)}, "
-        f"filtered={len(filtered)}, "
+        f"filtered={len(filtered)}, balanced={len(balanced)}, "
         f"max_pairs={MAX_DATE_PAIRS}, "
         f"max_offers_per_pair={MAX_OFFERS_PER_PAIR}, "
         f"max_offers_total={MAX_OFFERS_TOTAL}"
@@ -417,7 +448,7 @@ def search_business(params: SearchParams):
     return {
         "status": "ok",
         "source": "duffel",
-        "options": [o.dict() for o in filtered],
+        "options": [o.dict() for o in balanced],
     }
 
 
@@ -483,7 +514,7 @@ def duffel_test(
 ):
     """
     Simple test endpoint for Duffel search.
-    Uses whatever DUFFEL_ACCESS_TOKEN is configured (test or live).
+    Uses whatever DUFFEL_ACCESS_TOKEN is configured.
     No bookings are created.
     """
     if not DUFFEL_ACCESS_TOKEN:
