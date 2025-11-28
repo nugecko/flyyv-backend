@@ -9,7 +9,21 @@ from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from airlines import AIRLINE_NAMES, AIRLINE_BOOKING_URL
+# Robust import from airlines, so a naming mismatch does not crash the app
+try:
+    from airlines import AIRLINE_NAMES  # type: ignore
+except ImportError:
+    AIRLINE_NAMES: Dict[str, str] = {}
+
+try:
+    # Prefer singular
+    from airlines import AIRLINE_BOOKING_URL  # type: ignore
+except ImportError:
+    try:
+        # Fall back to plural if that is what airlines.py uses
+        from airlines import AIRLINE_BOOKING_URLS as AIRLINE_BOOKING_URL  # type: ignore
+    except ImportError:
+        AIRLINE_BOOKING_URL: Dict[str, str] = {}
 
 
 # ------------- Models ------------- #
@@ -281,7 +295,7 @@ def map_duffel_offer_to_option(
         airline_code,
         owner.get("name", airline_code or "Airline"),
     )
-    booking_url = AIRLINE_BOOKING_URL.get(airline_code)
+    booking_url = AIRLINE_BOOKING_URL.get(airline_code) if isinstance(AIRLINE_BOOKING_URL, dict) else None
 
     slices = offer.get("slices", []) or []
     outbound_segments = []
