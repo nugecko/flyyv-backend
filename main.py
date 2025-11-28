@@ -178,9 +178,9 @@ if not DUFFEL_ACCESS_TOKEN:
 
 # Hard safety caps, regardless of what the frontend sends
 # These are deliberately lower so even aggressive control panel values cannot overload the container
-MAX_OFFERS_PER_PAIR_HARD = 50      # max offers per date pair
-MAX_OFFERS_TOTAL_HARD = 2000       # total offers across all pairs
-MAX_DATE_PAIRS_HARD = 45           # total date pairs scanned per job
+MAX_OFFERS_PER_PAIR_HARD = 30      # max offers per date pair
+MAX_OFFERS_TOTAL_HARD = 1000       # total offers across all pairs
+MAX_DATE_PAIRS_HARD = 20           # total date pairs scanned per job
 
 # Below this number of date pairs, we run synchronously
 SYNC_PAIR_THRESHOLD = 10
@@ -301,7 +301,7 @@ def duffel_list_offers(offer_request_id: str, limit: int = 300) -> List[dict]:
         "sort": "total_amount",
     }
 
-    resp = requests.get(url, params=params, headers=duffel_headers(), timeout=30)
+    resp = requests.get(url, params=params, headers=duffel_headers(), timeout=15)
     if resp.status_code >= 400:
         print("Duffel offers error:", resp.status_code, resp.text)
         raise HTTPException(status_code=502, detail="Duffel API error")
@@ -635,56 +635,88 @@ def fetch_offers_for_pair(
 
 def run_search_job(job_id: str):
     """
-    Background job that performs the full Duffel scan and updates progress.
-    Uses a small thread pool so several date pairs are scanned in parallel.
+    Background job that performs the Duffel scan and updates progress.
+
+    This version is deliberately simple:
+    - Processes date pairs sequentially
+    - Updates processed_pairs as it goes
+    - Respects the same caps as run_duffel_scan
     """
     job = JOBS.get(job_id)
     if not job:
+        print(f"[JOB {job_id}] Job not found in memory")
         return
 
     job.status = JobStatus.RUNNING
     job.updated_at = datetime.utcnow()
     JOBS[job_id] = job
+    print(f"[JOB {job_id}] Starting async search")
 
     try:
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
-        pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
-        total_pairs = len(pairs)
+        date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
+        total_pairs = len(date_pairs)
         job.total_pairs = total_pairs
+        job.processed_pairs = 0
+        job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
+        print(
+            f"[JOB {job_id}] total_pairs={total_pairs}, "
+            f"max_offers_pair={max_offers_pair}, max_offers_total={max_offers_total}"
+        )
 
         collected_offers: List[Tuple[dict, date, date]] = []
         total_count = 0
 
-        # Parallel Duffel calls with 3 workers
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                executor.submit(
-                    fetch_offers_for_pair,
-                    dep,
-                    ret,
-                    job.params,
-                    max_offers_pair,
-                ): (dep, ret)
-                for dep, ret in pairs
-            }
+        for index, (dep, ret) in enumerate(date_pairs, start=1):
+            # Update progress
+            job.processed_pairs = index
+            job.updated_at = datetime.utcnow()
+            JOBS[job_id] = job
+            print(
+                f"[JOB {job_id}] processing pair {index}/{total_pairs}: "
+                f"{dep} -> {ret}, collected={total_count}"
+            )
 
-            processed = 0
-            for future in as_completed(futures):
-                processed += 1
-                job.processed_pairs = processed
-                job.updated_at = datetime.utcnow()
-                JOBS[job_id] = job
+            if total_count >= max_offers_total:
+                print(f"[JOB {job_id}] reached max_offers_total={max_offers_total}, stopping early")
+                break
 
-                pair_offers = future.result() or []
+            slices = [
+                {
+                    "origin": job.params.origin,
+                    "destination": job.params.destination,
+                    "departure_date": dep.isoformat(),
+                },
+                {
+                    "origin": job.params.destination,
+                    "destination": job.params.origin,
+                    "departure_date": ret.isoformat(),
+                },
+            ]
+            pax = [{"type": "adult"} for _ in range(job.params.passengers)]
 
-                for offer, dep, ret in pair_offers:
-                    if total_count >= max_offers_total:
-                        break
-                    collected_offers.append((offer, dep, ret))
-                    total_count += 1
+            try:
+                offer_request = duffel_create_offer_request(slices, pax, job.params.cabin)
+                offer_request_id = offer_request.get("id")
+                if not offer_request_id:
+                    print(f"[JOB {job_id}] No offer_request id for pair {dep} -> {ret}")
+                    continue
 
+                per_pair_limit = min(max_offers_pair, max_offers_total - total_count)
+                offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+            except HTTPException as e:
+                print(f"[JOB {job_id}] Duffel HTTPException for {dep} -> {ret}: {e.detail}")
+                continue
+            except Exception as e:
+                print(f"[JOB {job_id}] Unexpected Duffel error for {dep} -> {ret}: {e}")
+                continue
+
+            for offer in offers_json:
+                collected_offers.append((offer, dep, ret))
+                total_count += 1
                 if total_count >= max_offers_total:
+                    print(f"[JOB {job_id}] reached max_offers_total while adding offers")
                     break
 
         mapped: List[FlightOption] = [
@@ -694,18 +726,19 @@ def run_search_job(job_id: str):
 
         filtered = apply_filters(mapped, job.params)
         balanced = balance_airlines(filtered, max_per_airline=50)
-
         JOB_RESULTS[job_id] = balanced
 
         job.status = JobStatus.COMPLETED
         job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
+        print(f"[JOB {job_id}] Completed with {len(balanced)} options")
 
     except Exception as e:
         job.status = JobStatus.FAILED
         job.error = str(e)
         job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
+        print(f"[JOB {job_id}] FAILED: {e}")
 
 # ===== END SECTION: ASYNC JOB RUNNER =====
 
@@ -750,7 +783,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         }
 
     estimated_pairs = estimate_date_pairs(params)
-    use_async = False
+    use_async = params.fullCoverage or estimated_pairs > SYNC_PAIR_THRESHOLD
 
     if not use_async:
         # Small search, do it inline
