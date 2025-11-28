@@ -9,7 +9,11 @@ from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Robust import from airlines, so a naming mismatch does not crash the app
+# =======================================
+# SECTION: AIRLINES IMPORTS
+# =======================================
+
+# Robust import from airlines so a naming mismatch does not crash the app
 try:
     from airlines import AIRLINE_NAMES  # type: ignore
 except ImportError:
@@ -25,8 +29,12 @@ except ImportError:
     except ImportError:
         AIRLINE_BOOKING_URL: Dict[str, str] = {}
 
+# ===== END SECTION: AIRLINES IMPORTS =====
 
-# ------------- Models ------------- #
+
+# =======================================
+# SECTION: Pydantic MODELS
+# =======================================
 
 class SearchParams(BaseModel):
     origin: str
@@ -135,8 +143,12 @@ class SearchResultsResponse(BaseModel):
     limit: int
     options: List[FlightOption]
 
+# ===== END SECTION: Pydantic MODELS =====
 
-# ------------- FastAPI app ------------- #
+
+# =======================================
+# SECTION: FastAPI APP AND CORS
+# =======================================
 
 app = FastAPI()
 
@@ -148,8 +160,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ===== END SECTION: FastAPI APP AND CORS =====
 
-# ------------- Env and Duffel config ------------- #
+
+# =======================================
+# SECTION: ENV AND DUFFEL CONFIG
+# =======================================
 
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
 
@@ -160,7 +176,6 @@ DUFFEL_VERSION = "v2"
 if not DUFFEL_ACCESS_TOKEN:
     print("WARNING: DUFFEL_ACCESS_TOKEN is not set, searches will fail")
 
-
 # Hard safety caps, regardless of what the frontend sends
 # These are deliberately lower so even aggressive control panel values cannot overload the container
 MAX_OFFERS_PER_PAIR_HARD = 50      # max offers per date pair
@@ -170,8 +185,12 @@ MAX_DATE_PAIRS_HARD = 45           # total date pairs scanned per job
 # Below this number of date pairs, we run synchronously
 SYNC_PAIR_THRESHOLD = 10
 
+# ===== END SECTION: ENV AND DUFFEL CONFIG =====
 
-# ------------- In memory stores ------------- #
+
+# =======================================
+# SECTION: IN MEMORY STORES
+# =======================================
 
 # Wallets for admin credits endpoint
 USER_WALLETS: Dict[str, int] = {}
@@ -180,8 +199,12 @@ USER_WALLETS: Dict[str, int] = {}
 JOBS: Dict[str, SearchJob] = {}
 JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 
+# ===== END SECTION: IN MEMORY STORES =====
 
-# ------------- Duffel helpers ------------- #
+
+# =======================================
+# SECTION: DUFFEL HELPERS
+# =======================================
 
 def duffel_headers() -> dict:
     return {
@@ -196,12 +219,32 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple
     """
     Generate (departure, return) pairs across the window,
     respecting minStayDays and maxStayDays.
+
+    Special case:
+    If earliestDeparture equals latestDeparture and minStayDays equals maxStayDays,
+    treat it as a single fixed trip and return exactly one pair.
+
+    This matches the One off payload from Base44, which sends:
+    earliestDeparture = chosen outbound date
+    latestDeparture = same date
+    minStayDays = chosen number of nights
+    maxStayDays = same as minStayDays
+    fullCoverage = false
+    maxDatePairs = 1
     """
     pairs: List[Tuple[date, date]] = []
 
     min_stay = max(1, params.minStayDays)
     max_stay = max(min_stay, params.maxStayDays)
 
+    # One off fixed trip: earliest equals latest and single stay length
+    if params.earliestDeparture == params.latestDeparture and min_stay == max_stay:
+        dep = params.earliestDeparture
+        ret = dep + timedelta(days=min_stay)
+        pairs.append((dep, ret))
+        return pairs[:max_pairs]
+
+    # Normal flexible window behaviour for Smart mode
     stays = list(range(min_stay, max_stay + 1))
     current = params.earliestDeparture
 
@@ -429,6 +472,12 @@ def map_duffel_offer_to_option(
         url=booking_url,
     )
 
+# ===== END SECTION: DUFFEL HELPERS =====
+
+
+# =======================================
+# SECTION: FILTERING AND BALANCING
+# =======================================
 
 def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
     """
@@ -466,8 +515,12 @@ def balance_airlines(options: List[FlightOption], max_per_airline: int = 50) -> 
     trimmed.sort(key=lambda x: x.price)
     return trimmed
 
+# ===== END SECTION: FILTERING AND BALANCING =====
 
-# ------------- Shared search helpers ------------- #
+
+# =======================================
+# SECTION: SHARED SEARCH HELPERS
+# =======================================
 
 def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
     """
@@ -537,8 +590,12 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     balanced = balance_airlines(filtered, max_per_airline=50)
     return balanced
 
+# ===== END SECTION: SHARED SEARCH HELPERS =====
 
-# ------------- Parallel helper for async job ------------- #
+
+# =======================================
+# SECTION: PARALLEL HELPER FOR ASYNC JOB
+# =======================================
 
 def fetch_offers_for_pair(
     dep: date,
@@ -569,8 +626,12 @@ def fetch_offers_for_pair(
         print("Duffel error in parallel pair", dep, "to", ret, ":", e)
         return []
 
+# ===== END SECTION: PARALLEL HELPER FOR ASYNC JOB =====
 
-# ------------- Async job runner ------------- #
+
+# =======================================
+# SECTION: ASYNC JOB RUNNER
+# =======================================
 
 def run_search_job(job_id: str):
     """
@@ -646,8 +707,12 @@ def run_search_job(job_id: str):
         job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
 
+# ===== END SECTION: ASYNC JOB RUNNER =====
 
-# ------------- Routes: health ------------- #
+
+# =======================================
+# SECTION: ROOT AND HEALTH ROUTES
+# =======================================
 
 @app.get("/")
 def home():
@@ -658,8 +723,12 @@ def home():
 def health():
     return {"status": "ok"}
 
+# ===== END SECTION: ROOT AND HEALTH ROUTES =====
 
-# ------------- Routes: main search (sync plus async) ------------- #
+
+# =======================================
+# SECTION: MAIN SEARCH ROUTES
+# =======================================
 
 from uuid import uuid4  # keep import close to usage to avoid clutter
 
@@ -671,7 +740,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
     Behaviour:
     - For small searches with few date pairs run synchronously and return results.
-    - For large searches or fullCoverage=True create an async job and return jobId.
+    - For large searches or fullCoverage True create an async job and return jobId.
     """
     if not DUFFEL_ACCESS_TOKEN:
         return {
@@ -776,8 +845,12 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
         options=slice_,
     )
 
+# ===== END SECTION: MAIN SEARCH ROUTES =====
 
-# ------------- Admin credits endpoint ------------- #
+
+# =======================================
+# SECTION: ADMIN CREDITS ENDPOINT
+# =======================================
 
 @app.post("/admin/add-credits")
 def admin_add_credits(
@@ -821,8 +894,12 @@ def admin_add_credits(
         "newBalance": new_balance,
     }
 
+# ===== END SECTION: ADMIN CREDITS ENDPOINT =====
 
-# ------------- Duffel test endpoint ------------- #
+
+# =======================================
+# SECTION: DUFFEL TEST ENDPOINT
+# =======================================
 
 @app.get("/duffel-test")
 def duffel_test(
@@ -873,3 +950,5 @@ def duffel_test(
         "source": "duffel",
         "offers": results,
     }
+
+# ===== END SECTION: DUFFEL TEST ENDPOINT =====
