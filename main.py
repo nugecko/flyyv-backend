@@ -9,7 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from airlines import AIRLINE_NAMES, AIRLINE_BOOKING_URLS
+from airlines import AIRLINE_NAMES, AIRLINE_BOOKING_URL
 
 
 # ------------- Models ------------- #
