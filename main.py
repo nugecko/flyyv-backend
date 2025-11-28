@@ -2,7 +2,6 @@ import os
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -356,7 +355,7 @@ def map_duffel_offer_to_option(
 
     stops_outbound = max(0, len(outbound_segments) - 1)
 
-    # Duration and airport info, still based on the outbound slice
+    # Duration and airport info, based on the outbound slice
     duration_minutes = 0
     origin_code = None
     destination_code = None
@@ -387,7 +386,7 @@ def map_duffel_offer_to_option(
 
     iso_duration = build_iso_duration(duration_minutes)
 
-    # Stopover codes and airports for summary, still outbound only
+    # Stopover codes and airports for summary, outbound only
     stopover_codes: List[str] = []
     stopover_airports: List[str] = []
     if len(outbound_segments) > 1:
@@ -594,42 +593,6 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
 
 # =======================================
-# SECTION: PARALLEL HELPER FOR ASYNC JOB
-# =======================================
-
-def fetch_offers_for_pair(
-    dep: date,
-    ret: date,
-    params: SearchParams,
-    max_offers_pair: int,
-) -> List[Tuple[dict, date, date]]:
-    """
-    Helper for parallel execution.
-    Fetches offers for a single (departure, return) pair and returns
-    a list of (offer_json, dep, ret).
-    """
-    slices = [
-        {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
-        {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
-    ]
-    pax = [{"type": "adult"} for _ in range(params.passengers)]
-
-    try:
-        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
-        offer_request_id = offer_request.get("id")
-        if not offer_request_id:
-            return []
-
-        offers_json = duffel_list_offers(offer_request_id, limit=max_offers_pair)
-        return [(offer, dep, ret) for offer in offers_json]
-    except Exception as e:
-        print("Duffel error in parallel pair", dep, "to", ret, ":", e)
-        return []
-
-# ===== END SECTION: PARALLEL HELPER FOR ASYNC JOB =====
-
-
-# =======================================
 # SECTION: ASYNC JOB RUNNER
 # =======================================
 
@@ -637,10 +600,11 @@ def run_search_job(job_id: str):
     """
     Background job that performs the Duffel scan and updates progress.
 
-    This version is deliberately simple:
+    This version:
     - Processes date pairs sequentially
     - Updates processed_pairs as it goes
-    - Respects the same caps as run_duffel_scan
+    - Appends mapped FlightOption results incrementally into JOB_RESULTS[job_id]
+      so that /search-status and /search-results can return partial data
     """
     job = JOBS.get(job_id)
     if not job:
@@ -651,6 +615,10 @@ def run_search_job(job_id: str):
     job.updated_at = datetime.utcnow()
     JOBS[job_id] = job
     print(f"[JOB {job_id}] Starting async search")
+
+    # Ensure there is a list to hold results
+    if job_id not in JOB_RESULTS:
+        JOB_RESULTS[job_id] = []
 
     try:
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
@@ -665,7 +633,6 @@ def run_search_job(job_id: str):
             f"max_offers_pair={max_offers_pair}, max_offers_total={max_offers_total}"
         )
 
-        collected_offers: List[Tuple[dict, date, date]] = []
         total_count = 0
 
         for index, (dep, ret) in enumerate(date_pairs, start=1):
@@ -712,26 +679,38 @@ def run_search_job(job_id: str):
                 print(f"[JOB {job_id}] Unexpected Duffel error for {dep} -> {ret}: {e}")
                 continue
 
+            # Map this pair's offers to FlightOption objects
+            batch_mapped: List[FlightOption] = []
             for offer in offers_json:
-                collected_offers.append((offer, dep, ret))
+                batch_mapped.append(map_duffel_offer_to_option(offer, dep, ret))
                 total_count += 1
                 if total_count >= max_offers_total:
                     print(f"[JOB {job_id}] reached max_offers_total while adding offers")
                     break
 
-        mapped: List[FlightOption] = [
-            map_duffel_offer_to_option(offer, dep, ret)
-            for offer, dep, ret in collected_offers
-        ]
+            if not batch_mapped:
+                continue
 
-        filtered = apply_filters(mapped, job.params)
-        balanced = balance_airlines(filtered, max_per_airline=50)
-        JOB_RESULTS[job_id] = balanced
+            # Combine with existing partial results and apply filters and balancing
+            existing = JOB_RESULTS.get(job_id, [])
+            combined = existing + batch_mapped
+
+            filtered = apply_filters(combined, job.params)
+            balanced = balance_airlines(filtered, max_per_airline=50)
+
+            JOB_RESULTS[job_id] = balanced
+            print(f"[JOB {job_id}] partial results updated, count={len(balanced)}")
+
+            if total_count >= max_offers_total:
+                break
+
+        # At this point JOB_RESULTS[job_id] already contains filtered and balanced results
+        final_results = JOB_RESULTS.get(job_id, [])
 
         job.status = JobStatus.COMPLETED
         job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
-        print(f"[JOB {job_id}] Completed with {len(balanced)} options")
+        print(f"[JOB {job_id}] Completed with {len(final_results)} options")
 
     except Exception as e:
         job.status = JobStatus.FAILED
@@ -808,6 +787,9 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     )
     JOBS[job_id] = job
 
+    # Initialise empty results so status and results endpoints can return partial data
+    JOB_RESULTS[job_id] = []
+
     # Start background job
     background_tasks.add_task(run_search_job, job_id)
 
@@ -820,7 +802,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
 
 @app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
-def get_search_status(job_id: str, preview_limit: int = 0):
+def get_search_status(job_id: str, preview_limit: int = 20):
     """
     Return job status, progress and optional preview of results.
     Used for the scanning progress bar.
@@ -854,8 +836,9 @@ def get_search_status(job_id: str, preview_limit: int = 0):
 @app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
     """
-    Return a slice of results for a completed job.
-    Powers load more results on the frontend.
+    Return a slice of results for a job.
+    Powers load more results on the frontend and can serve partial data
+    while the job is still running.
     """
     job = JOBS.get(job_id)
     if not job:
