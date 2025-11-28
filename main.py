@@ -277,8 +277,11 @@ def map_duffel_offer_to_option(
 
     owner = offer.get("owner", {}) or {}
     airline_code = owner.get("iata_code")
-    airline_name = AIRLINE_NAMES.get(airline_code, owner.get("name", airline_code or "Airline"))
-    booking_url = AIRLINE_BOOKING_URLS.get(airline_code)
+    airline_name = AIRLINE_NAMES.get(
+        airline_code,
+        owner.get("name", airline_code or "Airline"),
+    )
+    booking_url = AIRLINE_BOOKING_URL.get(airline_code)
 
     slices = offer.get("slices", []) or []
     outbound_segments = []
@@ -481,7 +484,12 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
 # ------------- Parallel helper for async job ------------- #
 
-def fetch_offers_for_pair(dep: date, ret: date, params: SearchParams, max_offers_pair: int) -> List[Tuple[dict, date, date]]:
+def fetch_offers_for_pair(
+    dep: date,
+    ret: date,
+    params: SearchParams,
+    max_offers_pair: int,
+) -> List[Tuple[dict, date, date]]:
     """
     Helper for parallel execution.
     Fetches offers for a single (departure, return) pair and returns
@@ -534,7 +542,13 @@ def run_search_job(job_id: str):
         # Parallel Duffel calls with 5 workers
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = {
-                executor.submit(fetch_offers_for_pair, dep, ret, job.params, max_offers_pair): (dep, ret)
+                executor.submit(
+                    fetch_offers_for_pair,
+                    dep,
+                    ret,
+                    job.params,
+                    max_offers_pair,
+                ): (dep, ret)
                 for dep, ret in pairs
             }
 
@@ -589,7 +603,7 @@ def health():
     return {"status": "ok"}
 
 
-# ------------- Routes: main search (sync + async) ------------- #
+# ------------- Routes: main search (sync plus async) ------------- #
 
 from uuid import uuid4  # keep import close to usage to avoid clutter
 
@@ -600,12 +614,8 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     Main endpoint used by the Base44 frontend.
 
     Behaviour:
-    - For small searches (few date pairs) run synchronously and return results.
+    - For small searches with few date pairs run synchronously and return results.
     - For large searches or fullCoverage=True create an async job and return jobId.
-
-    Frontend behaviour:
-    - If mode == "sync": use options directly.
-    - If mode == "async": poll /search-status/{jobId} then fetch /search-results/{jobId}.
     """
     if not DUFFEL_ACCESS_TOKEN:
         return {
@@ -687,7 +697,7 @@ def get_search_status(job_id: str, preview_limit: int = 0):
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
     """
     Return a slice of results for a completed job.
-    Powers "load more results" on the frontend.
+    Powers load more results on the frontend.
     """
     job = JOBS.get(job_id)
     if not job:
@@ -767,7 +777,7 @@ def duffel_test(
 ):
     """
     Simple test endpoint for Duffel search.
-    Uses whatever DUFFEL_ACCESS_TOKEN is configured (test or live).
+    Uses whatever DUFFEL_ACCESS_TOKEN is configured, test or live.
     No bookings are created.
     """
     if not DUFFEL_ACCESS_TOKEN:
