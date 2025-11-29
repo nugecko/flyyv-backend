@@ -1,5 +1,4 @@
 import os
-
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
@@ -13,24 +12,21 @@ from sqlalchemy.orm import Session
 
 from db import engine, Base, SessionLocal
 import models  # noqa: F401
-from models import AdminConfig
+from models import AdminConfig, AppUser
 
 # =======================================
 # SECTION: AIRLINES IMPORTS
 # =======================================
 
-# Robust import from airlines so a naming mismatch does not crash the app
 try:
     from airlines import AIRLINE_NAMES  # type: ignore
 except ImportError:
     AIRLINE_NAMES: Dict[str, str] = {}
 
 try:
-    # Prefer singular
     from airlines import AIRLINE_BOOKING_URL  # type: ignore
 except ImportError:
     try:
-        # Fall back to plural if that is what airlines.py uses
         from airlines import AIRLINE_BOOKING_URLS as AIRLINE_BOOKING_URL  # type: ignore
     except ImportError:
         AIRLINE_BOOKING_URL: Dict[str, str] = {}
@@ -88,20 +84,15 @@ class SearchParams(BaseModel):
     latestDeparture: date
     minStayDays: int
     maxStayDays: int
-    # None means no price limit
     maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
-    # Optional filter for number of stops, for example [0, 1, 2]
-    # 3 is treated as "3 or more stops"
     stopsFilter: Optional[List[int]] = None
 
-    # Tuning parameters coming from the frontend
     maxOffersPerPair: int = 50
     maxOffersTotal: int = 5000
     maxDatePairs: int = 45
 
-    # Hint to use async full coverage mode
     fullCoverage: bool = True
 
 
@@ -119,20 +110,16 @@ class FlightOption(BaseModel):
     totalDurationMinutes: Optional[int] = None
     duration: Optional[str] = None
 
-    # Fields for Base44 filtering
-    origin: Optional[str] = None              # origin IATA code
-    destination: Optional[str] = None         # destination IATA code
-    originAirport: Optional[str] = None       # full origin airport name
-    destinationAirport: Optional[str] = None  # full destination airport name
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    originAirport: Optional[str] = None
+    destinationAirport: Optional[str] = None
 
-    # Stopover info for display
     stopoverCodes: Optional[List[str]] = None
     stopoverAirports: Optional[List[str]] = None
 
-    # Detailed segment info for stopover display
     segments: Optional[List[Dict[str, Any]]] = None
 
-    # Aircraft information, optional
     aircraftCodes: Optional[List[str]] = None
     aircraftNames: Optional[List[str]] = None
 
@@ -148,64 +135,6 @@ class CreditUpdateRequest(BaseModel):
     value: Optional[int] = None
     reason: Optional[str] = None
 
-
-# Models for user sync and profile
-
-class UserSyncPayload(BaseModel):
-    external_id: str
-    email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    country: Optional[str] = None
-    marketing_consent: Optional[bool] = None
-    source: Optional[str] = None  # for example "base44"
-
-
-class ProfileUser(BaseModel):
-    id: str
-    name: Optional[str] = None
-    email: Optional[str] = None
-    plan: Optional[str] = None
-
-
-class SubscriptionInfo(BaseModel):
-    plan: str
-    billingCycle: Optional[str] = None
-    renewalDate: Optional[str] = None
-    monthlyCredits: int = 0
-
-
-class WalletInfo(BaseModel):
-    balance: int = 0
-    currency: str = "credits"
-
-
-class ProfileResponse(BaseModel):
-    user: ProfileUser
-    subscription: SubscriptionInfo
-    wallet: WalletInfo
-
-
-class AlertOut(BaseModel):
-    id: str
-    origin: str
-    destination: str
-    earliestDeparture: Optional[str] = None
-    latestDeparture: Optional[str] = None
-    nights: Optional[int] = None
-    frequency: Optional[str] = None
-    status: Optional[str] = None
-
-
-class PublicConfig(BaseModel):
-    maxDepartureWindowDays: int
-    maxStayNights: int
-    minStayNights: int
-    maxPassengers: int
-    searchMode: str
-
-
-# Job models for async search
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -244,6 +173,48 @@ class SearchResultsResponse(BaseModel):
     limit: int
     options: List[FlightOption]
 
+
+class UserSyncPayload(BaseModel):
+    external_id: str
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    country: Optional[str] = None
+    marketing_consent: Optional[bool] = None
+    source: Optional[str] = None
+
+
+class ProfileUser(BaseModel):
+    id: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    plan: Optional[str] = None
+
+
+class SubscriptionInfo(BaseModel):
+    plan: str
+    billingCycle: Optional[str] = None
+    renewalDate: Optional[str] = None
+    monthlyCredits: int = 0
+
+
+class WalletInfo(BaseModel):
+    balance: int
+    currency: str = "credits"
+
+
+class ProfileResponse(BaseModel):
+    user: ProfileUser
+    subscription: SubscriptionInfo
+    wallet: WalletInfo
+
+
+class PublicConfig(BaseModel):
+    maxDepartureWindowDays: int
+    maxStayNights: int
+    minStayNights: int
+    maxPassengers: int
+
 # ===== END SECTION: Pydantic MODELS =====
 
 
@@ -256,13 +227,12 @@ app = FastAPI()
 
 @app.on_event("startup")
 def on_startup():
-    # Create all database tables automatically
     Base.metadata.create_all(bind=engine)
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later you can restrict this to your Base44 domains
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -284,16 +254,11 @@ DUFFEL_VERSION = "v2"
 if not DUFFEL_ACCESS_TOKEN:
     print("WARNING: DUFFEL_ACCESS_TOKEN is not set, searches will fail")
 
-# Hard safety caps, independent from frontend values
-# Control panel values are further clamped by these to protect the container
-MAX_OFFERS_PER_PAIR_HARD = 30       # max offers per date pair
-MAX_OFFERS_TOTAL_HARD = 1000        # total offers across all pairs
-MAX_DATE_PAIRS_HARD = 20            # total date pairs scanned per job
+MAX_OFFERS_PER_PAIR_HARD = 30
+MAX_OFFERS_TOTAL_HARD = 1000
+MAX_DATE_PAIRS_HARD = 20
 
-# Below this number of date pairs, we run synchronously
 SYNC_PAIR_THRESHOLD = 10
-
-# How many date pairs to process in parallel inside async jobs
 PARALLEL_WORKERS = 2
 
 # ===== END SECTION: ENV AND DUFFEL CONFIG =====
@@ -303,10 +268,7 @@ PARALLEL_WORKERS = 2
 # SECTION: IN MEMORY STORES
 # =======================================
 
-# Wallets for admin credits endpoint
 USER_WALLETS: Dict[str, int] = {}
-
-# Async search jobs and results
 JOBS: Dict[str, SearchJob] = {}
 JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 
@@ -327,35 +289,17 @@ def duffel_headers() -> dict:
 
 
 def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple[date, date]]:
-    """
-    Generate (departure, return) pairs across the window,
-    respecting minStayDays and maxStayDays.
-
-    Special case:
-    If earliestDeparture equals latestDeparture and minStayDays equals maxStayDays,
-    treat it as a single fixed trip and return exactly one pair.
-
-    This matches the One off payload from Base44, which sends:
-    earliestDeparture = chosen outbound date
-    latestDeparture = same date
-    minStayDays = chosen number of nights
-    maxStayDays = same as minStayDays
-    fullCoverage = false
-    maxDatePairs = 1
-    """
     pairs: List[Tuple[date, date]] = []
 
     min_stay = max(1, params.minStayDays)
     max_stay = max(min_stay, params.maxStayDays)
 
-    # One off fixed trip
     if params.earliestDeparture == params.latestDeparture and min_stay == max_stay:
         dep = params.earliestDeparture
         ret = dep + timedelta(days=min_stay)
         pairs.append((dep, ret))
         return pairs[:max_pairs]
 
-    # Normal flexible window behaviour
     stays = list(range(min_stay, max_stay + 1))
     current = params.earliestDeparture
 
@@ -376,9 +320,6 @@ def duffel_create_offer_request(
     passengers: List[dict],
     cabin_class: str,
 ) -> dict:
-    """
-    Call Duffel to create an offer request and return the JSON body.
-    """
     if not DUFFEL_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="Duffel not configured")
 
@@ -401,10 +342,6 @@ def duffel_create_offer_request(
 
 
 def duffel_list_offers(offer_request_id: str, limit: int = 300) -> List[dict]:
-    """
-    List offers for a given offer request.
-    Simple one page fetch, then truncate to limit.
-    """
     url = f"{DUFFEL_API_BASE}/air/offers"
     params = {
         "offer_request_id": offer_request_id,
@@ -423,9 +360,6 @@ def duffel_list_offers(offer_request_id: str, limit: int = 300) -> List[dict]:
 
 
 def build_iso_duration(minutes: int) -> str:
-    """
-    Create a rough ISO 8601 duration string like PT4H30M from minutes.
-    """
     if minutes <= 0:
         return "PT0M"
     hours = minutes // 60
@@ -442,9 +376,6 @@ def map_duffel_offer_to_option(
     dep: date,
     ret: date,
 ) -> FlightOption:
-    """
-    Map Duffel offer JSON to our FlightOption model.
-    """
     price = float(offer.get("total_amount", 0))
     currency = offer.get("total_currency", "GBP")
 
@@ -467,7 +398,6 @@ def map_duffel_offer_to_option(
 
     stops_outbound = max(0, len(outbound_segments) - 1)
 
-    # Duration and airport info, based on the outbound slice
     duration_minutes = 0
     origin_code = None
     destination_code = None
@@ -498,7 +428,6 @@ def map_duffel_offer_to_option(
 
     iso_duration = build_iso_duration(duration_minutes)
 
-    # Stopover codes and airports for summary, outbound only
     stopover_codes: List[str] = []
     stopover_airports: List[str] = []
     if len(outbound_segments) > 1:
@@ -511,8 +440,6 @@ def map_duffel_offer_to_option(
             if name:
                 stopover_airports.append(name)
 
-    # Build segments list for detailed display, including both outbound and return,
-    # plus aircraft and layover minutes
     segments_info: List[Dict[str, Any]] = []
     aircraft_codes: List[str] = []
     aircraft_names: List[str] = []
@@ -531,7 +458,6 @@ def map_duffel_offer_to_option(
             if aircraft_name:
                 aircraft_names.append(aircraft_name)
 
-            # Compute layover until the next segment within this slice
             layover_minutes_to_next: Optional[int] = None
             if idx < len(seg_list) - 1:
                 this_arr = seg.get("arriving_at")
@@ -545,7 +471,7 @@ def map_duffel_offer_to_option(
 
             segments_info.append(
                 {
-                    "direction": direction,  # "outbound" or "return"
+                    "direction": direction,
                     "origin": o.get("iata_code"),
                     "originAirport": o.get("name"),
                     "destination": d.get("iata_code"),
@@ -591,9 +517,6 @@ def map_duffel_offer_to_option(
 # =======================================
 
 def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
-    """
-    Apply price and stops filters, then sort by price.
-    """
     filtered = list(options)
 
     if params.maxPrice is not None and params.maxPrice > 0:
@@ -611,9 +534,6 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
 
 
 def balance_airlines(options: List[FlightOption], max_per_airline: int = 50) -> List[FlightOption]:
-    """
-    Limit how many results each airline can dominate.
-    """
     buckets: Dict[str, List[FlightOption]] = {}
     for opt in options:
         key = opt.airlineCode or opt.airline
@@ -634,16 +554,8 @@ def balance_airlines(options: List[FlightOption], max_per_airline: int = 50) -> 
 # =======================================
 
 def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
-    """
-    Compute effective caps for this search, combining:
-    - frontend hints (maxOffersPerPair, maxOffersTotal, maxDatePairs)
-    - Directus config values
-    - hard coded safety caps
-    """
-    # Max date pairs is only clamped by hard cap for now
     max_pairs = max(1, min(params.maxDatePairs, MAX_DATE_PAIRS_HARD))
 
-    # Combine frontend request, Directus config and hard caps
     requested_per_pair = max(1, params.maxOffersPerPair)
     requested_total = max(1, params.maxOffersTotal)
 
@@ -669,9 +581,6 @@ def estimate_date_pairs(params: SearchParams) -> int:
 
 
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
-    """
-    Synchronous scan used for small searches.
-    """
     max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
     date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
     if not date_pairs:
@@ -733,10 +642,6 @@ def process_date_pair_offers(
     ret: date,
     max_offers_pair: int,
 ) -> List[FlightOption]:
-    """
-    Helper for async job runner.
-    Performs Duffel calls for a single date pair and maps results to FlightOption objects.
-    """
     slices = [
         {
             "origin": params.origin,
@@ -773,15 +678,6 @@ def process_date_pair_offers(
 
 
 def run_search_job(job_id: str):
-    """
-    Background job that performs the Duffel scan and updates progress.
-
-    This version:
-    - Processes date pairs in parallel batches inside a ThreadPoolExecutor
-    - Updates processed_pairs as each pair completes
-    - Maintains JOB_RESULTS[job_id] as filtered and balanced partial results
-      so that /search-status and /search-results can return data while still running
-    """
     job = JOBS.get(job_id)
     if not job:
         print(f"[JOB {job_id}] Job not found in memory")
@@ -792,7 +688,6 @@ def run_search_job(job_id: str):
     JOBS[job_id] = job
     print(f"[JOB {job_id}] Starting async search")
 
-    # Ensure there is a list to hold results
     if job_id not in JOB_RESULTS:
         JOB_RESULTS[job_id] = []
 
@@ -819,7 +714,6 @@ def run_search_job(job_id: str):
             return
 
         with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
-            # Process date pairs in batches to limit concurrency
             for batch_start in range(0, total_pairs, PARALLEL_WORKERS):
                 if total_count >= max_offers_total:
                     print(f"[JOB {job_id}] Reached max_offers_total before batch, stopping")
@@ -840,7 +734,6 @@ def run_search_job(job_id: str):
                 for future in as_completed(futures):
                     dep, ret = futures[future]
 
-                    # Mark one more pair as processed for progress bar
                     job.processed_pairs += 1
                     job.updated_at = datetime.utcnow()
                     JOBS[job_id] = job
@@ -859,15 +752,12 @@ def run_search_job(job_id: str):
                     if not batch_mapped:
                         continue
 
-                    # Combine with existing partial results
                     existing = JOB_RESULTS.get(job_id, [])
                     combined = existing + batch_mapped
 
-                    # Apply filters and balancing
                     filtered = apply_filters(combined, job.params)
                     balanced = balance_airlines(filtered, max_per_airline=50)
 
-                    # Enforce total cap on number of results stored
                     if len(balanced) > max_offers_total:
                         balanced = balanced[:max_offers_total]
 
@@ -925,18 +815,11 @@ def list_routes():
 # SECTION: MAIN SEARCH ROUTES
 # =======================================
 
-from uuid import uuid4  # keep import close to usage to avoid clutter
+from uuid import uuid4
 
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
-    """
-    Main endpoint used by the Base44 frontend.
-
-    Behaviour:
-    - For small searches with few date pairs run synchronously and return results.
-    - For large searches or fullCoverage True create an async job and return jobId.
-    """
     if not DUFFEL_ACCESS_TOKEN:
         return {
             "status": "error",
@@ -944,7 +827,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
             "options": [],
         }
 
-    # Enforce backend controlled passenger and cabin defaults
     max_passengers = get_config_int("MAX_PASSENGERS", 4)
     if params.passengers > max_passengers:
         params.passengers = max_passengers
@@ -955,7 +837,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
     estimated_pairs = estimate_date_pairs(params)
 
-    # Use SEARCH_MODE from Directus to optionally force sync or async
     search_mode = get_config_str("SEARCH_MODE", "AUTO") or "AUTO"
     mode = (search_mode or "AUTO").upper()
     if mode == "SYNC":
@@ -966,7 +847,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         use_async = params.fullCoverage or estimated_pairs > SYNC_PAIR_THRESHOLD
 
     if not use_async:
-        # Small search, do it inline
         options = run_duffel_scan(params)
         return {
             "status": "ok",
@@ -975,7 +855,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
             "options": [o.dict() for o in options],
         }
 
-    # Large search, create async job
     job_id = str(uuid4())
     job = SearchJob(
         id=job_id,
@@ -987,11 +866,8 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         processed_pairs=0,
     )
     JOBS[job_id] = job
-
-    # Initialise empty results so status and results endpoints can return partial data
     JOB_RESULTS[job_id] = []
 
-    # Start background job
     background_tasks.add_task(run_search_job, job_id)
 
     return {
@@ -1004,10 +880,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
 @app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
 def get_search_status(job_id: str, preview_limit: int = 20):
-    """
-    Return job status, progress and optional preview of results.
-    Used for the scanning progress bar.
-    """
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1036,11 +908,6 @@ def get_search_status(job_id: str, preview_limit: int = 20):
 
 @app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
-    """
-    Return a slice of results for a job.
-    Powers load more results on the frontend and can serve partial data
-    while the job is still running.
-    """
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1159,11 +1026,6 @@ def duffel_test(
     departure: date,
     passengers: int = 1,
 ):
-    """
-    Simple test endpoint for Duffel search.
-    Uses whatever DUFFEL_ACCESS_TOKEN is configured, test or live.
-    No bookings are created.
-    """
     if not DUFFEL_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="Duffel not configured")
 
@@ -1214,38 +1076,58 @@ def duffel_test(
 # =======================================
 
 @app.get("/public-config", response_model=PublicConfig)
-def get_public_config():
-    """
-    Public config for the frontend.
-    This lets Base44 and any future frontend know the safe limits.
-    """
-    max_departure_window = get_config_int("MAX_DEPARTURE_WINDOW_DAYS", 30)
-    max_stay_nights = get_config_int("MAX_STAY_NIGHTS", 30)
-    min_stay_nights = get_config_int("MIN_STAY_NIGHTS", 1)
+def public_config():
+    max_window = get_config_int("MAX_DEPARTURE_WINDOW_DAYS", 30)
+    max_stay = get_config_int("MAX_STAY_NIGHTS", 30)
+    min_stay = get_config_int("MIN_STAY_NIGHTS", 1)
     max_passengers = get_config_int("MAX_PASSENGERS", 4)
-    search_mode = get_config_str("SEARCH_MODE", "AUTO") or "AUTO"
 
     return PublicConfig(
-        maxDepartureWindowDays=max_departure_window,
-        maxStayNights=max_stay_nights,
-        minStayNights=min_stay_nights,
+        maxDepartureWindowDays=max_window,
+        maxStayNights=max_stay,
+        minStayNights=min_stay,
         maxPassengers=max_passengers,
-        searchMode=search_mode,
     )
 
 
 @app.post("/user-sync")
 def user_sync(payload: UserSyncPayload):
     """
-    Accept user profile from Base44.
-
-    For now this does not write to the database.
-    It simply accepts the payload and returns status ok,
-    so the frontend can safely call it without any schema assumptions.
-
-    Later we can wire this into app_users once the schema is final.
+    Accept user profile from Base44 and upsert into app_users.
     """
-    return {"status": "ok", "id": payload.external_id}
+    db = SessionLocal()
+    try:
+        user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == payload.external_id)
+            .first()
+        )
+
+        if user is None:
+            user = AppUser(
+                external_id=payload.external_id,
+                email=payload.email,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                country=payload.country,
+                marketing_consent=payload.marketing_consent,
+                source=payload.source or "base44",
+            )
+            db.add(user)
+        else:
+            user.email = payload.email
+            user.first_name = payload.first_name
+            user.last_name = payload.last_name
+            user.country = payload.country
+            user.marketing_consent = payload.marketing_consent
+            user.source = payload.source or user.source
+
+        db.commit()
+        db.refresh(user)
+
+        return {"status": "ok", "id": user.id}
+    finally:
+        db.close()
 
 
 @app.get("/profile", response_model=ProfileResponse)
@@ -1254,21 +1136,35 @@ def get_profile(
 ):
     """
     Return profile summary for the profile page.
-
-    For now this:
-      - does not rely on the database schema
-      - uses USER_WALLETS for balance
-      - returns a generic Free profile keyed only by X-User-Id
-
-    Once we finalise the app_users schema, we can look up by email or a
-    dedicated external_id column instead of this generic version.
     """
     wallet_balance = USER_WALLETS.get(x_user_id, 0)
 
+    db = SessionLocal()
+    try:
+        app_user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == x_user_id)
+            .first()
+        )
+    finally:
+        db.close()
+
+    if app_user:
+        name_parts: List[str] = []
+        if app_user.first_name:
+            name_parts.append(app_user.first_name)
+        if app_user.last_name:
+            name_parts.append(app_user.last_name)
+        name = " ".join(name_parts) or "Flyyv user"
+        email = app_user.email
+    else:
+        name = "Flyyv user"
+        email = None
+
     profile_user = ProfileUser(
         id=x_user_id,
-        name="Flyyv user",
-        email=None,
+        name=name,
+        email=email,
         plan="Free",
     )
 
@@ -1291,15 +1187,13 @@ def get_profile(
     )
 
 
-@app.get("/alerts", response_model=List[AlertOut])
-def list_alerts(
+@app.get("/alerts")
+def get_alerts(
     x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     """
-    List alerts for the current user.
-
-    For now this returns an empty list so the profile page renders.
-    Later we can back it with a real alerts table in Postgres or Directus.
+    Return list of alerts for the current user.
+    For now this returns an empty list so the frontend can integrate safely.
     """
     return []
 
