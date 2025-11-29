@@ -883,6 +883,87 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
 # ===== END SECTION: MAIN SEARCH ROUTES =====
 
+# =======================================
+# SECTION: SEARCH STATUS AND RESULTS ROUTES
+# =======================================
+
+@app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
+def get_search_status(job_id: str, preview_limit: int = 20):
+    # Look up the job in memory
+    job = JOBS.get(job_id)
+
+    if not job:
+        # Debug log so we can see what is going on on the server
+        print(f"[search-status] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
+
+        # Graceful fallback instead of 404 so the frontend does not break
+        return SearchStatusResponse(
+            jobId=job_id,
+            status=JobStatus.PENDING,
+            processedPairs=0,
+            totalPairs=0,
+            progress=0.0,
+            error="Job not found in memory yet",
+            previewCount=0,
+            previewOptions=[],
+        )
+
+    options = JOB_RESULTS.get(job_id, [])
+
+    if preview_limit > 0:
+        preview = options[:preview_limit]
+    else:
+        preview = []
+
+    total_pairs = job.total_pairs or 0
+    processed_pairs = job.processed_pairs or 0
+    progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
+
+    return SearchStatusResponse(
+        jobId=job.id,
+        status=job.status,
+        processedPairs=processed_pairs,
+        totalPairs=total_pairs,
+        progress=progress,
+        error=job.error,
+        previewCount=len(preview),
+        previewOptions=preview,
+    )
+
+
+@app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
+def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
+    job = JOBS.get(job_id)
+    if not job:
+        # Same graceful fallback logic, but for results
+        print(f"[search-results] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
+        return SearchResultsResponse(
+            jobId=job_id,
+            status=JobStatus.PENDING,
+            totalResults=0,
+            offset=0,
+            limit=limit,
+            options=[],
+        )
+
+    options = JOB_RESULTS.get(job_id, [])
+
+    offset = max(0, offset)
+    limit = max(1, min(limit, 200))
+    end = min(offset + limit, len(options))
+    slice_ = options[offset:end]
+
+    return SearchResultsResponse(
+        jobId=job.id,
+        status=job.status,
+        totalResults=len(options),
+        offset=offset,
+        limit=limit,
+        options=slice_,
+    )
+
+# ===== END SECTION: SEARCH STATUS AND RESULTS ROUTES =====
+
 
 # =======================================
 # SECTION: ADMIN CREDITS ENDPOINT
