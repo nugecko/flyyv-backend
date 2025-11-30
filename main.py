@@ -735,4 +735,842 @@ def run_search_job(job_id: str):
         if total_pairs == 0:
             job.status = JobStatus.COMPLETED
             job.updated_at = datetime.utcnow()
-            JOBS
+            JOBS[job_id] = job
+            print(f"[JOB {job_id}] No date pairs, completed with 0 options")
+            return
+
+        with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
+            for batch_start in range(0, total_pairs, PARALLEL_WORKERS):
+                if total_count >= max_offers_total:
+                    print(f"[JOB {job_id}] Reached max_offers_total before batch, stopping")
+                    break
+
+                batch_pairs = date_pairs[batch_start: batch_start + PARALLEL_WORKERS]
+                futures = {
+                    executor.submit(
+                        process_date_pair_offers,
+                        job.params,
+                        dep,
+                        ret,
+                        max_offers_pair,
+                    ): (dep, ret)
+                    for dep, ret in batch_pairs
+                }
+
+                for future in as_completed(futures):
+                    dep, ret = futures[future]
+
+                    job.processed_pairs += 1
+                    job.updated_at = datetime.utcnow()
+                    JOBS[job_id] = job
+
+                    print(
+                        f"[JOB {job_id}] processed pair {job.processed_pairs}/{total_pairs}: "
+                        f"{dep} -> {ret}, current_results={total_count}"
+                    )
+
+                    try:
+                        batch_mapped = future.result()
+                    except Exception as e:
+                        print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
+                        continue
+
+                    if not batch_mapped:
+                        continue
+
+                    existing = JOB_RESULTS.get(job_id, [])
+                    combined = existing + batch_mapped
+
+                    filtered = apply_filters(combined, job.params)
+                    balanced = balance_airlines(filtered, max_per_airline=50)
+
+                    if len(balanced) > max_offers_total:
+                        balanced = balanced[:max_offers_total]
+
+                    JOB_RESULTS[job_id] = balanced
+                    total_count = len(balanced)
+
+                    print(f"[JOB {job_id}] partial results updated, count={total_count}")
+
+                    if total_count >= max_offers_total:
+                        print(f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping")
+                        break
+
+                if total_count >= max_offers_total:
+                    break
+
+        final_results = JOB_RESULTS.get(job_id, [])
+
+        job.status = JobStatus.COMPLETED
+        job.updated_at = datetime.utcnow()
+        JOBS[job_id] = job
+        print(f"[JOB {job_id}] Completed with {len(final_results)} options")
+
+    except Exception as e:
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        job.updated_at = datetime.utcnow()
+        JOBS[job_id] = job
+        print(f"[JOB {job_id}] FAILED: {e}")
+
+# ===== END SECTION: ASYNC JOB RUNNER =====
+
+
+# =======================================
+# SECTION: PRICE WATCH HELPERS
+# =======================================
+
+def build_flyyv_link(params: SearchParams, departure: str, return_date: str) -> str:
+    base = FRONTEND_BASE_URL.rstrip("/")
+    return (
+        f"{base}/?origin={params.origin}"
+        f"&destination={params.destination}"
+        f"&departure={departure}"
+        f"&return={return_date}"
+        f"&cabin={params.cabin}"
+        f"&passengers={params.passengers}"
+    )
+
+
+def run_price_watch() -> Dict[str, Any]:
+    """
+    Single test watch rule:
+    origin, destination, start, end, stay nights and max price are from env.
+    """
+    if not WATCH_START_DATE or not WATCH_END_DATE:
+        raise HTTPException(
+            status_code=500,
+            detail="WATCH_START_DATE and WATCH_END_DATE must be configured in YYYY-MM-DD format",
+        )
+
+    try:
+        start = datetime.strptime(WATCH_START_DATE, "%Y-%m-%d").date()
+        end = datetime.strptime(WATCH_END_DATE, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=500,
+            detail="WATCH_START_DATE or WATCH_END_DATE invalid format, expected YYYY-MM-DD",
+        )
+
+    if end < start:
+        raise HTTPException(
+            status_code=500,
+            detail="WATCH_END_DATE must be on or after WATCH_START_DATE",
+        )
+
+    params = SearchParams(
+        origin=WATCH_ORIGIN,
+        destination=WATCH_DESTINATION,
+        earliestDeparture=start,
+        latestDeparture=end,
+        minStayDays=WATCH_STAY_NIGHTS,
+        maxStayDays=WATCH_STAY_NIGHTS,
+        maxPrice=None,
+        cabin="BUSINESS",
+        passengers=1,
+        stopsFilter=None,
+    )
+
+    # All watched date pairs, even ones that return no data
+    watched_pairs = generate_date_pairs(params, max_pairs=365)
+
+    # Actual scan, may be capped by hard limits
+    options = run_duffel_scan(params)
+
+    grouped: Dict[Tuple[str, str], List[FlightOption]] = defaultdict(list)
+    for opt in options:
+        key = (opt.departureDate, opt.returnDate)
+        grouped[key].append(opt)
+
+    pairs_summary: List[Dict[str, Any]] = []
+    any_under = False
+
+    for dep, ret in watched_pairs:
+        dep_str = dep.isoformat()
+        ret_str = ret.isoformat()
+        flights = grouped.get((dep_str, ret_str), [])
+
+        if not flights:
+            status = "no_data"
+            cheapest_price = None
+            cheapest_currency = None
+            cheapest_airline = None
+            flights_under: List[Dict[str, Any]] = []
+        else:
+            flights_sorted = sorted(flights, key=lambda f: f.price)
+            cheapest = flights_sorted[0]
+            cheapest_price = cheapest.price
+            cheapest_currency = cheapest.currency
+            cheapest_airline = cheapest.airline
+
+            if cheapest_price <= WATCH_MAX_PRICE:
+                status = "under_threshold"
+                any_under = True
+            else:
+                status = "above_threshold"
+
+            flights_under = []
+            if status == "under_threshold":
+                for f in flights_sorted:
+                    if f.price <= WATCH_MAX_PRICE:
+                        flyyv_link = build_flyyv_link(params, f.departureDate, f.returnDate)
+                        flights_under.append(
+                            {
+                                "airline": f.airline,
+                                "airlineCode": f.airlineCode,
+                                "price": f.price,
+                                "currency": f.currency,
+                                "origin": f.origin,
+                                "destination": f.destination,
+                                "departureDate": f.departureDate,
+                                "returnDate": f.returnDate,
+                                "flyyvLink": flyyv_link,
+                                "airlineUrl": f.url or "",
+                            }
+                        )
+                    if len(flights_under) >= 3:
+                        break
+
+        pairs_summary.append(
+            {
+                "departureDate": dep_str,
+                "returnDate": ret_str,
+                "status": status,
+                "cheapestPrice": cheapest_price,
+                "cheapestCurrency": cheapest_currency,
+                "cheapestAirline": cheapest_airline,
+                "flightsUnderThreshold": flights_under,
+            }
+        )
+
+    return {
+        "origin": WATCH_ORIGIN,
+        "destination": WATCH_DESTINATION,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "cabin": params.cabin,
+        "passengers": params.passengers,
+        "stay_nights": WATCH_STAY_NIGHTS,
+        "max_price": WATCH_MAX_PRICE,
+        "any_under_threshold": any_under,
+        "pairs": pairs_summary,
+    }
+
+# ===== END SECTION: PRICE WATCH HELPERS =====
+
+
+# =======================================
+# SECTION: EMAIL HELPERS
+# =======================================
+
+def send_test_alert_email() -> None:
+    """
+    Simple SMTP test using SMTP2Go.
+    Uses environment variables:
+    SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
+    ALERT_FROM_EMAIL, ALERT_TO_EMAIL
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    msg = EmailMessage()
+    msg["Subject"] = "Flyyv test alert email"
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = ALERT_TO_EMAIL
+    msg.set_content(
+        "This is a test Flyyv alert sent via SMTP2Go.\n\n"
+        "If you are reading this, SMTP is working."
+    )
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send test email: {e}",
+        )
+
+
+def send_daily_alert_email() -> None:
+    """
+    Build and send the price watch alert email for the configured window.
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    watch = run_price_watch()
+    threshold = watch["max_price"]
+    pairs = watch["pairs"]
+    any_under = watch["any_under_threshold"]
+
+    start_dt = datetime.fromisoformat(watch["start_date"])
+    end_dt = datetime.fromisoformat(watch["end_date"])
+    start_label = start_dt.strftime("%d %B %Y")
+    end_label = end_dt.strftime("%d %B %Y")
+
+    if any_under:
+        subject_suffix = f"fare found under £{int(threshold)}"
+    else:
+        subject_suffix = "no changes"
+
+    subject = (
+        f"Your {watch['stay_nights']} night "
+        f"{watch['origin']} to {watch['destination']} alert, {subject_suffix}"
+    )
+
+    lines: List[str] = []
+
+    lines.append(
+        f"Watch: {watch['origin']} \u2192 {watch['destination']}, "
+        f"{watch['cabin'].title()} class, "
+        f"{watch['stay_nights']} nights, {watch['passengers']} pax, max £{int(threshold)}"
+    )
+    lines.append(f"Date window: {start_label} to {end_label}")
+    lines.append("")
+
+    if any_under:
+        lines.append(f"Deals under £{int(threshold)} found:")
+        lines.append("")
+        for p in pairs:
+            if p["status"] != "under_threshold":
+                continue
+            dep_iso = p["departureDate"]
+            ret_iso = p["returnDate"]
+            dep_dt = datetime.fromisoformat(dep_iso)
+            ret_dt = datetime.fromisoformat(ret_iso)
+            dep_label = dep_dt.strftime("%d %b")
+            ret_label = ret_dt.strftime("%d %b")
+
+            flights_under = p["flightsUnderThreshold"]
+            if not flights_under:
+                continue
+
+            for f in flights_under:
+                lines.append(
+                    f"{dep_label} \u2192 {ret_label}: £{int(f['price'])} with {f['airline']}"
+                )
+                lines.append(f"  Route: {f['origin']} \u2192 {f['destination']}")
+                lines.append(f"  View in Flyyv: {f['flyyvLink']}")
+                if f.get("airlineUrl"):
+                    lines.append(f"  Airline site: {f['airlineUrl']}")
+                lines.append("")
+    else:
+        lines.append(
+            f"No fares under £{int(threshold)} were found for any watched dates."
+        )
+        lines.append("")
+
+    lines.append("Summary of all watched dates:")
+    lines.append("")
+
+    for p in pairs:
+        dep_iso = p["departureDate"]
+        ret_iso = p["returnDate"]
+        dep_dt = datetime.fromisoformat(dep_iso)
+        ret_dt = datetime.fromisoformat(ret_iso)
+        dep_label = dep_dt.strftime("%d %b")
+        ret_label = ret_dt.strftime("%d %b")
+
+        status = p["status"]
+        if status == "no_data":
+            note = "no data returned"
+        elif status == "under_threshold":
+            note = f"fare £{int(p['cheapestPrice'])} with {p['cheapestAirline']}"
+        else:
+            if p["cheapestPrice"] is not None:
+                note = (
+                    f"no fares under £{int(threshold)} "
+                    f"(cheapest £{int(p['cheapestPrice'])})"
+                )
+            else:
+                note = "no fares returned"
+
+        lines.append(f"{dep_label} \u2192 {ret_label}: {note}")
+
+    body = "\n".join(lines)
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = ALERT_TO_EMAIL
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send daily alert email: {e}",
+        )
+
+# ===== END SECTION: EMAIL HELPERS =====
+
+
+# =======================================
+# SECTION: ROOT, HEALTH AND ROUTES
+# =======================================
+
+@app.get("/")
+def home():
+    return {"message": "Flyyv backend is running"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/routes")
+def list_routes():
+    return [route.path for route in app.routes]
+
+
+@app.get("/test-email-alert")
+def test_email_alert():
+    """
+    Simple endpoint to verify SMTP2Go configuration.
+    Open /test-email-alert in a browser and you should receive an email.
+    """
+    send_test_alert_email()
+    return {"detail": "Test alert email sent"}
+
+
+@app.get("/trigger-daily-alert")
+def trigger_daily_alert():
+    """
+    Endpoint that sends the price watch alert email.
+    This is what cron will call every N minutes.
+    """
+    if not ALERTS_ENABLED:
+        return {"detail": "Alerts are currently disabled"}
+    send_daily_alert_email()
+    return {"detail": "Daily alert email sent"}
+
+# ===== END SECTION: ROOT, HEALTH AND ROUTES =====
+
+
+# =======================================
+# SECTION: MAIN SEARCH ROUTES
+# =======================================
+
+@app.post("/search-business")
+def search_business(params: SearchParams, background_tasks: BackgroundTasks):
+    """
+    Main search endpoint.
+
+    One date pair only  sync search, returns results immediately.
+    Multiple date pairs  always async, returns a jobId and lets the background
+    worker do the heavy lifting so we avoid 504 timeouts.
+    """
+    if not DUFFEL_ACCESS_TOKEN:
+        return {
+            "status": "error",
+            "source": "duffel_not_configured",
+            "options": [],
+        }
+
+    max_passengers = get_config_int("MAX_PASSENGERS", 4)
+    if params.passengers > max_passengers:
+        params.passengers = max_passengers
+
+    default_cabin = get_config_str("DEFAULT_CABIN", "BUSINESS") or "BUSINESS"
+    if not params.cabin:
+        params.cabin = default_cabin
+
+    estimated_pairs = estimate_date_pairs(params)
+
+    print(
+        f"[search_business] estimated_pairs={estimated_pairs}, "
+        f"fullCoverage={params.fullCoverage}"
+    )
+
+    if estimated_pairs <= 1:
+        options = run_duffel_scan(params)
+        return {
+            "status": "ok",
+            "mode": "sync",
+            "source": "duffel",
+            "options": [o.dict() for o in options],
+        }
+
+    job_id = str(uuid4())
+    job = SearchJob(
+        id=job_id,
+        status=JobStatus.PENDING,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        params=params,
+        total_pairs=0,
+        processed_pairs=0,
+    )
+    JOBS[job_id] = job
+    JOB_RESULTS[job_id] = []
+
+    background_tasks.add_task(run_search_job, job_id)
+
+    return {
+        "status": "ok",
+        "mode": "async",
+        "jobId": job_id,
+        "message": "Search started",
+    }
+
+# ===== END SECTION: MAIN SEARCH ROUTES =====
+
+
+# =======================================
+# SECTION: SEARCH STATUS AND RESULTS ROUTES
+# =======================================
+
+@app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
+def get_search_status(job_id: str, preview_limit: int = 20):
+    job = JOBS.get(job_id)
+
+    if not job:
+        print(f"[search-status] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
+
+        return SearchStatusResponse(
+            jobId=job_id,
+            status=JobStatus.PENDING,
+            processedPairs=0,
+            totalPairs=0,
+            progress=0.0,
+            error="Job not found in memory yet",
+            previewCount=0,
+            previewOptions=[],
+        )
+
+    options = JOB_RESULTS.get(job_id, [])
+
+    if preview_limit > 0:
+        preview = options[:preview_limit]
+    else:
+        preview = []
+
+    total_pairs = job.total_pairs or 0
+    processed_pairs = job.processed_pairs or 0
+    progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
+
+    return SearchStatusResponse(
+        jobId=job.id,
+        status=job.status,
+        processedPairs=processed_pairs,
+        totalPairs=total_pairs,
+        progress=progress,
+        error=job.error,
+        previewCount=len(preview),
+        previewOptions=preview,
+    )
+
+
+@app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
+def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
+    job = JOBS.get(job_id)
+    if not job:
+        print(f"[search-results] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
+        return SearchResultsResponse(
+            jobId=job_id,
+            status=JobStatus.PENDING,
+            totalResults=0,
+            offset=0,
+            limit=limit,
+            options=[],
+        )
+
+    options = JOB_RESULTS.get(job_id, [])
+
+    offset = max(0, offset)
+    limit = max(1, min(limit, 200))
+    end = min(offset + limit, len(options))
+    slice_ = options[offset:end]
+
+    return SearchResultsResponse(
+        jobId=job.id,
+        status=job.status,
+        totalResults=len(options),
+        offset=offset,
+        limit=limit,
+        options=slice_,
+    )
+
+# ===== END SECTION: SEARCH STATUS AND RESULTS ROUTES =====
+
+
+# =======================================
+# SECTION: ADMIN CREDITS ENDPOINT
+# =======================================
+
+@app.post("/admin/add-credits")
+def admin_add_credits(
+    payload: CreditUpdateRequest,
+    x_admin_token: str = Header(None, alias="X-Admin-Token"),
+):
+    received = (x_admin_token or "").strip()
+    expected = (ADMIN_API_TOKEN or "").strip()
+
+    if received.lower().startswith("bearer "):
+        received = received[7:].strip()
+
+    if expected == "":
+        raise HTTPException(status_code=500, detail="Admin token not configured")
+
+    if received != expected:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    change_amount = (
+        payload.delta
+        if payload.delta is not None
+        else payload.amount
+        if payload.amount is not None
+        else payload.creditAmount
+        if payload.creditAmount is not None
+        else payload.value
+    )
+
+    if change_amount is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing credit amount. Expected one of: amount, delta, creditAmount, value.",
+        )
+
+    current = USER_WALLETS.get(payload.userId, 0)
+    new_balance = max(0, current + change_amount)
+    USER_WALLETS[payload.userId] = new_balance
+
+    return {
+        "userId": payload.userId,
+        "newBalance": new_balance,
+    }
+
+# ===== END SECTION: ADMIN CREDITS ENDPOINT =====
+
+
+# =======================================
+# SECTION: CONFIG DEBUG ENDPOINT
+# =======================================
+
+@app.get("/config-debug")
+def config_debug(
+    x_admin_token: str = Header(None, alias="X-Admin-Token"),
+):
+    received = (x_admin_token or "").strip()
+    expected = (ADMIN_API_TOKEN or "").strip()
+
+    if received.lower().startswith("bearer "):
+        received = received[7:].strip()
+
+    if expected == "":
+        raise HTTPException(status_code=500, detail="Admin token not configured")
+
+    if received != expected:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    return {
+        "MAX_OFFERS_TOTAL": get_config_int("MAX_OFFERS_TOTAL", 5000),
+        "MAX_OFFERS_PER_PAIR": get_config_int("MAX_OFFERS_PER_PAIR", 50),
+        "MAX_PASSENGERS": get_config_int("MAX_PASSENGERS", 4),
+        "DEFAULT_CABIN": get_config_str("DEFAULT_CABIN", "BUSINESS") or "BUSINESS",
+        "SEARCH_MODE": get_config_str("SEARCH_MODE", "AUTO") or "AUTO",
+        "MAX_OFFERS_PER_PAIR_HARD": MAX_OFFERS_PER_PAIR_HARD,
+        "MAX_OFFERS_TOTAL_HARD": MAX_OFFERS_TOTAL_HARD,
+        "MAX_DATE_PAIRS_HARD": MAX_DATE_PAIRS_HARD,
+    }
+
+# ===== END SECTION: CONFIG DEBUG ENDPOINT =====
+
+
+# =======================================
+# SECTION: DUFFEL TEST ENDPOINT
+# =======================================
+
+@app.get("/duffel-test")
+def duffel_test(
+    origin: str,
+    destination: str,
+    departure: date,
+    passengers: int = 1,
+):
+    if not DUFFEL_ACCESS_TOKEN:
+        raise HTTPException(status_code=500, detail="Duffel not configured")
+
+    max_passengers = get_config_int("MAX_PASSENGERS", 4)
+    if passengers > max_passengers:
+        passengers = max_passengers
+
+    slices = [
+        {
+            "origin": origin,
+            "destination": destination,
+            "departure_date": departure.isoformat(),
+        }
+    ]
+    pax = [{"type": "adult"} for _ in range(passengers)]
+
+    offer_request = duffel_create_offer_request(slices, pax, "business")
+    offer_request_id = offer_request.get("id")
+    if not offer_request_id:
+        return {"status": "error", "message": "No offer_request id from Duffel"}
+
+    offers_json = duffel_list_offers(offer_request_id, limit=50)
+
+    results = []
+    for offer in offers_json:
+        owner = offer.get("owner", {}) or {}
+        results.append(
+            {
+                "id": offer.get("id"),
+                "airline": owner.get("name"),
+                "airlineCode": owner.get("iata_code"),
+                "price": float(offer.get("total_amount", 0)),
+                "currency": offer.get("total_currency", "GBP"),
+            }
+        )
+
+    return {
+        "status": "ok",
+        "source": "duffel",
+        "offers": results,
+    }
+
+# ===== END SECTION: DUFFEL TEST ENDPOINT =====
+
+
+# =======================================
+# SECTION: PUBLIC CONFIG, USER SYNC, PROFILE, ALERTS
+# =======================================
+
+@app.get("/public-config", response_model=PublicConfig)
+def public_config():
+    max_window = get_config_int("MAX_DEPARTURE_WINDOW_DAYS", 30)
+    max_stay = get_config_int("MAX_STAY_NIGHTS", 30)
+    min_stay = get_config_int("MIN_STAY_NIGHTS", 1)
+    max_passengers = get_config_int("MAX_PASSENGERS", 4)
+
+    return PublicConfig(
+        maxDepartureWindowDays=max_window,
+        maxStayNights=max_stay,
+        minStayNights=min_stay,
+        maxPassengers=max_passengers,
+    )
+
+
+@app.post("/user-sync")
+def user_sync(payload: UserSyncPayload):
+    """
+    Accept user profile from Base44 and upsert into app_users.
+    """
+    db = SessionLocal()
+    try:
+        user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == payload.external_id)
+            .first()
+        )
+
+        if user is None:
+            user = AppUser(
+                external_id=payload.external_id,
+                email=payload.email,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                country=payload.country,
+                marketing_consent=payload.marketing_consent,
+                source=payload.source or "base44",
+            )
+            db.add(user)
+        else:
+            user.email = payload.email
+            user.first_name = payload.first_name
+            user.last_name = payload.last_name
+            user.country = payload.country
+            user.marketing_consent = payload.marketing_consent
+            user.source = payload.source or user.source
+
+        db.commit()
+        db.refresh(user)
+
+        return {"status": "ok", "id": user.id}
+    finally:
+        db.close()
+
+
+@app.get("/profile", response_model=ProfileResponse)
+def get_profile(
+    x_user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Return profile summary for the profile page.
+    """
+    wallet_balance = USER_WALLETS.get(x_user_id, 0)
+
+    db = SessionLocal()
+    try:
+        app_user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == x_user_id)
+            .first()
+        )
+    finally:
+        db.close()
+
+    if app_user:
+        name_parts: List[str] = []
+        if app_user.first_name:
+            name_parts.append(app_user.first_name)
+        if app_user.last_name:
+            name_parts.append(app_user.last_name)
+        name = " ".join(name_parts) or "Flyyv user"
+        email = app_user.email
+    else:
+        name = "Flyyv user"
+        email = None
+
+    profile_user = ProfileUser(
+        id=x_user_id,
+        name=name,
+        email=email,
+        plan="Free",
+    )
+
+    subscription = SubscriptionInfo(
+        plan="Flyyv Free",
+        billingCycle=None,
+        renewalDate=None,
+        monthlyCredits=0,
+    )
+
+    wallet = WalletInfo(
+        balance=wallet_balance,
+        currency="credits",
+    )
+
+    return ProfileResponse(
+        user=profile_user,
+        subscription=subscription,
+        wallet=wallet,
+    )
+
+
+@app.get("/alerts")
+def get_alerts(
+    x_user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Return list of alerts for the current user.
+    For now this returns an empty list so the frontend can integrate safely.
+    """
+    return []
+
+# ===== END SECTION: PUBLIC CONFIG, USER SYNC, PROFILE, ALERTS =====
