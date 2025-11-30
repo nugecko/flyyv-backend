@@ -879,16 +879,6 @@ def send_daily_alert_email() -> None:
 # SECTION: ROOT, HEALTH AND ROUTES
 # =======================================
 
-@app.get("/")
-def home():
-    return {"message": "Flyyv backend is running"}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
 @app.get("/routes")
 def list_routes():
     return [route.path for route in app.routes]
@@ -902,6 +892,16 @@ def test_email_alert():
     """
     send_test_alert_email()
     return {"detail": "Test alert email sent"}
+
+
+@app.get("/trigger-daily-alert")
+def trigger_daily_alert():
+    """
+    Endpoint that sends a daily alert style email.
+    This is what cron will call once per day.
+    """
+    send_daily_alert_email()
+    return {"detail": "Daily alert email sent"}
 
 # ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
