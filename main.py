@@ -4,6 +4,8 @@ from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
+import smtplib
+from email.message import EmailMessage
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -243,7 +245,7 @@ app.add_middleware(
 
 
 # =======================================
-# SECTION: ENV AND DUFFEL CONFIG
+# SECTION: ENV, DUFFEL AND EMAIL CONFIG
 # =======================================
 
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
@@ -262,7 +264,15 @@ MAX_DATE_PAIRS_HARD = 20
 SYNC_PAIR_THRESHOLD = 10
 PARALLEL_WORKERS = 2
 
-# ===== END SECTION: ENV AND DUFFEL CONFIG =====
+# Email alert configuration for SMTP2Go
+SMTP_HOST = os.getenv("SMTP_HOST", "mail-eu.smtp2go.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "2525"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+ALERT_FROM_EMAIL = os.getenv("ALERT_FROM_EMAIL", "price-alert@flyyv.com")
+ALERT_TO_EMAIL = os.getenv("ALERT_TO_EMAIL")
+
+# ===== END SECTION: ENV, DUFFEL AND EMAIL CONFIG =====
 
 
 # =======================================
@@ -792,6 +802,46 @@ def run_search_job(job_id: str):
 
 
 # =======================================
+# SECTION: EMAIL HELPERS
+# =======================================
+
+def send_test_alert_email() -> None:
+    """
+    Simple SMTP test using SMTP2Go.
+    Uses environment variables:
+    SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
+    ALERT_FROM_EMAIL, ALERT_TO_EMAIL
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    msg = EmailMessage()
+    msg["Subject"] = "Flyyv test alert email"
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = ALERT_TO_EMAIL
+    msg.set_content(
+        "This is a test Flyyv alert sent via SMTP2Go.\n\n"
+        "If you are reading this, SMTP is working."
+    )
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send test email: {e}",
+        )
+
+# ===== END SECTION: EMAIL HELPERS =====
+
+
+# =======================================
 # SECTION: ROOT, HEALTH AND ROUTES
 # =======================================
 
@@ -808,6 +858,16 @@ def health():
 @app.get("/routes")
 def list_routes():
     return [route.path for route in app.routes]
+
+
+@app.get("/test-email-alert")
+def test_email_alert():
+    """
+    Simple endpoint to verify SMTP2Go configuration.
+    Open /test-email-alert in a browser and you should receive an email.
+    """
+    send_test_alert_email()
+    return {"detail": "Test alert email sent"}
 
 # ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
@@ -882,6 +942,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     }
 
 # ===== END SECTION: MAIN SEARCH ROUTES =====
+
 
 # =======================================
 # SECTION: SEARCH STATUS AND RESULTS ROUTES
