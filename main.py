@@ -838,6 +838,40 @@ def send_test_alert_email() -> None:
             detail=f"Failed to send test email: {e}",
         )
 
+
+def send_daily_alert_email() -> None:
+    """
+    Placeholder for a real daily Flyyv alert.
+    For now it just sends a simple daily alert test.
+    Later we can plug in real deals.
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    msg = EmailMessage()
+    msg["Subject"] = "Flyyv daily alert test"
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = ALERT_TO_EMAIL
+    msg.set_content(
+        "Your Flyyv daily alert test.\n\n"
+        "In production this email will contain real flight deals.\n"
+        "For now it confirms that daily alert sending works."
+    )
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send daily alert email: {e}",
+        )
+
 # ===== END SECTION: EMAIL HELPERS =====
 
 
