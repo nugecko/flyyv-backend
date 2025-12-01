@@ -1363,7 +1363,7 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
     options = JOB_RESULTS.get(job_id, [])
 
     offset = max(0, offset)
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(limit, 600))
     end = min(offset + limit, len(options))
     slice_ = options[offset:end]
 
