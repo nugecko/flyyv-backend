@@ -260,7 +260,7 @@ if not DUFFEL_ACCESS_TOKEN:
     print("WARNING: DUFFEL_ACCESS_TOKEN is not set, searches will fail")
 
 # Hard caps, tuned for two month window and 50-100 offers per pair
-MAX_OFFERS_PER_PAIR_HARD = 100
+MAX_OFFERS_PER_PAIR_HARD = 300
 MAX_OFFERS_TOTAL_HARD = 4000
 MAX_DATE_PAIRS_HARD = 60
 
@@ -569,6 +569,7 @@ def balance_airlines(
     """
     Ensure airlines get fair representation while keeping cheapest options first.
     Uses MAX_AIRLINE_SHARE_PERCENT from AdminConfig, default 40 percent.
+    The cap is applied relative to the actual list size, not just the global max.
     """
     if not options:
         return []
@@ -577,6 +578,9 @@ def balance_airlines(
 
     if max_total is None or max_total <= 0:
         max_total = len(sorted_by_price)
+
+    # Work with the smaller of max_total and the actual list size
+    actual_total = min(max_total, len(sorted_by_price))
 
     max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 40)
     if max_share_percent <= 0 or max_share_percent > 100:
@@ -588,14 +592,12 @@ def balance_airlines(
     unique_airlines = {o.airlineCode or o.airline for o in sorted_by_price}
     num_airlines = max(1, len(unique_airlines))
 
-    # Hard cap per airline based on allowed share
-    # Example with max_total 100 and 40 percent share gives 40 max per airline
-    base_cap = max(1, (max_share_percent * max_total) // 100)
-    # Also ensure at least a small number per airline when possible
-    per_airline_cap = max(base_cap, max_total // num_airlines if num_airlines else base_cap)
+    # Cap per airline based on the actual result size
+    base_cap = max(1, (max_share_percent * actual_total) // 100)
+    per_airline_cap = max(base_cap, actual_total // num_airlines if num_airlines else base_cap)
 
     for opt in sorted_by_price:
-        if len(result) >= max_total:
+        if len(result) >= actual_total:
             break
 
         key = opt.airlineCode or opt.airline
@@ -605,11 +607,11 @@ def balance_airlines(
         airline_counts[key] += 1
         result.append(opt)
 
-    # If we are still under max_total, fill remaining slots without extra fairness limit
-    if len(result) < max_total:
+    # Fill remaining slots, still sorted by price, without additional airline cap
+    if len(result) < actual_total:
         already_ids = {o.id for o in result}
         for opt in sorted_by_price:
-            if len(result) >= max_total:
+            if len(result) >= actual_total:
                 break
             if opt.id in already_ids:
                 continue
