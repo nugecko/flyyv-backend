@@ -888,8 +888,11 @@ def run_price_watch() -> Dict[str, Any]:
     """
     Single test watch rule:
     origin, destination, start, end, stay nights and max price are from env.
-    For each date pair we keep only the single cheapest flight under threshold,
-    so the email shows at most one highlighted deal per pair.
+    For each date pair we store:
+      - totalFlights
+      - minPrice and maxPrice
+      - whether any fare is under WATCH_MAX_PRICE
+      - a single representative flight under the threshold for deep links
     """
     if not WATCH_START_DATE or not WATCH_END_DATE:
         raise HTTPException(
@@ -950,8 +953,15 @@ def run_price_watch() -> Dict[str, Any]:
             cheapest_currency = None
             cheapest_airline = None
             flights_under: List[Dict[str, Any]] = []
+            total_flights = 0
+            min_price = None
+            max_price = None
         else:
             flights_sorted = sorted(flights, key=lambda f: f.price)
+            total_flights = len(flights_sorted)
+            min_price = flights_sorted[0].price
+            max_price = flights_sorted[-1].price
+
             cheapest = flights_sorted[0]
             cheapest_price = cheapest.price
             cheapest_currency = cheapest.currency
@@ -965,7 +975,7 @@ def run_price_watch() -> Dict[str, Any]:
 
             flights_under = []
             if status == "under_threshold":
-                # Keep only the single cheapest flight per pair
+                # Keep only the single cheapest flight per pair for deep linking
                 flyyv_link = build_flyyv_link(params, cheapest.departureDate, cheapest.returnDate)
                 flights_under.append(
                     {
@@ -990,6 +1000,9 @@ def run_price_watch() -> Dict[str, Any]:
                 "cheapestPrice": cheapest_price,
                 "cheapestCurrency": cheapest_currency,
                 "cheapestAirline": cheapest_airline,
+                "totalFlights": total_flights,
+                "minPrice": min_price,
+                "maxPrice": max_price,
                 "flightsUnderThreshold": flights_under,
             }
         )
@@ -1051,7 +1064,11 @@ def send_test_alert_email() -> None:
 def send_daily_alert_email() -> None:
     """
     Build and send the price watch alert email for the configured window.
-    Shows one highlighted deal per date pair (the cheapest).
+    Shows one line per date pair, with:
+      - number of flights found
+      - price range
+      - cheapest fare and airline
+      - Flyyv and airline links only for pairs under the threshold
     """
     if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
         raise HTTPException(
@@ -1075,12 +1092,13 @@ def send_daily_alert_email() -> None:
         subject_suffix = "no changes"
 
     subject = (
-        f"Your {watch['stay_nights']} night "
-        f"{watch['origin']} to {watch['destination']} alert, {subject_suffix}"
+        f"Your {watch['origin']} to {watch['destination']} watch, "
+        f"{subject_suffix}"
     )
 
     lines: List[str] = []
 
+    # Header
     lines.append(
         f"Watch: {watch['origin']} \u2192 {watch['destination']}, "
         f"{watch['cabin'].title()} class, "
@@ -1091,7 +1109,7 @@ def send_daily_alert_email() -> None:
 
     # Top section, only if there are any fares under threshold
     if any_under:
-        lines.append(f"Deals under £{int(threshold)} found:")
+        lines.append(f"Deals found under your £{int(threshold)} limit:")
         lines.append("")
 
         for p in pairs:
@@ -1107,25 +1125,32 @@ def send_daily_alert_email() -> None:
 
             cheapest_price = p["cheapestPrice"]
             cheapest_airline = p["cheapestAirline"]
+            total_flights = p.get("totalFlights") or 0
+            min_price = p.get("minPrice")
+            max_price = p.get("maxPrice")
+
             if cheapest_price is None or cheapest_airline is None:
                 continue
+            if min_price is None or max_price is None:
+                min_price = cheapest_price
+                max_price = cheapest_price
 
             flights_under = p.get("flightsUnderThreshold") or []
             primary = flights_under[0] if flights_under else None
 
-            # Build a simple route and links from the first qualifying flight
             if primary:
                 route = f"{primary['origin']} \u2192 {primary['destination']}"
                 flyyv_link = primary["flyyvLink"]
                 airline_url = primary.get("airlineUrl") or ""
             else:
-                # Fallback route if for some reason we have no flight details
                 route = f"{watch['origin']} \u2192 {watch['destination']}"
                 flyyv_link = ""
                 airline_url = ""
 
             lines.append(
-                f"{dep_label} \u2192 {ret_label}: £{int(cheapest_price)} with {cheapest_airline}"
+                f"{dep_label} \u2192 {ret_label}: {total_flights} flights, "
+                f"range £{int(min_price)} to £{int(max_price)}, "
+                f"cheapest £{int(cheapest_price)} with {cheapest_airline}"
             )
             lines.append(f"  Route: {route}")
             if flyyv_link:
@@ -1139,7 +1164,7 @@ def send_daily_alert_email() -> None:
         )
         lines.append("")
 
-    # Summary of all watched date pairs, unchanged logic
+    # Summary of all watched date pairs
     lines.append("Summary of all watched dates:")
     lines.append("")
 
@@ -1152,18 +1177,19 @@ def send_daily_alert_email() -> None:
         ret_label = ret_dt.strftime("%d %b")
 
         status = p["status"]
+        total_flights = p.get("totalFlights") or 0
+        min_price = p.get("minPrice")
+        max_price = p.get("maxPrice")
+
         if status == "no_data":
-            note = "no data returned"
-        elif status == "under_threshold":
-            note = f"fare £{int(p['cheapestPrice'])} with {p['cheapestAirline']}"
+            note = "no flights returned"
+        elif total_flights == 0 or min_price is None or max_price is None:
+            note = "no flights returned"
         else:
-            if p["cheapestPrice"] is not None:
-                note = (
-                    f"no fares under £{int(threshold)} "
-                    f"(cheapest £{int(p['cheapestPrice'])})"
-                )
-            else:
-                note = "no fares returned"
+            note = (
+                f"{total_flights} flights, "
+                f"range £{int(min_price)} to £{int(max_price)}"
+            )
 
         lines.append(f"{dep_label} \u2192 {ret_label}: {note}")
 
