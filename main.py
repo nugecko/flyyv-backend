@@ -1264,15 +1264,21 @@ def test_email_alert():
 
 
 @app.get("/trigger-daily-alert")
-def trigger_daily_alert():
+def trigger_daily_alert(background_tasks: BackgroundTasks):
     """
-    Endpoint that sends the price watch alert email.
+    Endpoint that queues the price watch alert email.
     This is what cron will call every N minutes.
+    The heavy work runs in a background task so the HTTP response
+    returns quickly and avoids proxy timeouts.
     """
     if not ALERTS_ENABLED:
         return {"detail": "Alerts are currently disabled"}
-    send_daily_alert_email()
-    return {"detail": "Daily alert email sent"}
+
+    # Run the full watch and email in the background
+    background_tasks.add_task(send_daily_alert_email)
+
+    # Return immediately so nginx does not wait for the whole search
+    return {"detail": "Daily alert email queued"}
 
 # ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
