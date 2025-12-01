@@ -627,15 +627,26 @@ def balance_airlines(
 # =======================================
 
 def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
-    max_pairs = max(1, min(params.maxDatePairs, MAX_DATE_PAIRS_HARD))
+    """
+    Decide how many date pairs and offers to scan in total.
 
+    We ignore any maxDatePairs coming from the frontend and instead use
+    an admin config key MAX_DATE_PAIRS, so Smart mode always scans the
+    full window you define in Directus.
+    """
+    # How many departure/return pairs we are allowed to scan
+    config_max_pairs = get_config_int("MAX_DATE_PAIRS", 60)
+    max_pairs = max(1, min(config_max_pairs, MAX_DATE_PAIRS_HARD))
+
+    # Requested caps from the client
     requested_per_pair = max(1, params.maxOffersPerPair)
     requested_total = max(1, params.maxOffersTotal)
 
-    # Config driven caps with higher defaults for 2 month window
+    # Global caps from admin config
     config_max_offers_pair = get_config_int("MAX_OFFERS_PER_PAIR", 80)
     config_max_offers_total = get_config_int("MAX_OFFERS_TOTAL", 4000)
 
+    # Final per pair and total caps, respecting both config and hard limits
     max_offers_pair = max(
         1,
         min(requested_per_pair, config_max_offers_pair, MAX_OFFERS_PER_PAIR_HARD),
@@ -1448,9 +1459,10 @@ def config_debug(
     if received != expected:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
-    return {
+        return {
         "MAX_OFFERS_TOTAL": get_config_int("MAX_OFFERS_TOTAL", 4000),
         "MAX_OFFERS_PER_PAIR": get_config_int("MAX_OFFERS_PER_PAIR", 80),
+        "MAX_DATE_PAIRS": get_config_int("MAX_DATE_PAIRS", 60),
         "MAX_PASSENGERS": get_config_int("MAX_PASSENGERS", 4),
         "DEFAULT_CABIN": get_config_str("DEFAULT_CABIN", "BUSINESS") or "BUSINESS",
         "SEARCH_MODE": get_config_str("SEARCH_MODE", "AUTO") or "AUTO",
