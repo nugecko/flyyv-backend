@@ -1899,6 +1899,22 @@ def get_profile(
         wallet=wallet,
     )
 
+# =====================================================
+# MODELS FOR ALERT DATE SUMMARY ENDPOINT
+# =====================================================
+
+class AlertDateSummaryItem(BaseModel):
+    departureDate: date
+    returnDate: date
+    flightCount: int
+    minPrice: int
+    maxPrice: int
+
+
+class AlertDateSummaryResponse(BaseModel):
+    dates: List[AlertDateSummaryItem]
+
+
 # ===== BEGIN: LATEST ALERT RUN ENDPOINT =====
 
 @app.get("/alerts/{alert_id}/latest-run")
@@ -1999,6 +2015,51 @@ def get_latest_alert_run(
 
 # ===== END: LATEST ALERT RUN ENDPOINT =====
 
+
+# ===== BEGIN: ALERT DATE SUMMARY ENDPOINT =====
+
+@app.get("/alerts/{alert_id}/date-summary", response_model=AlertDateSummaryResponse)
+def get_alert_date_summary(
+    alert_id: str,
+    email: Optional[str] = None,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    db = SessionLocal()
+    try:
+        # resolve email exactly the same way as latest-run
+        resolved_email: Optional[str] = None
+        if email is not None:
+            resolved_email = email
+        elif x_user_id:
+            app_user = (
+                db.query(AppUser)
+                .filter(AppUser.external_id == x_user_id)
+                .first()
+            )
+            if app_user and app_user.email:
+                resolved_email = app_user.email
+
+        if not resolved_email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
+            )
+
+        alert = (
+            db.query(Alert)
+            .filter(Alert.id == alert_id)
+            .filter(Alert.user_email == resolved_email)
+            .first()
+        )
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        # placeholder for now, frontend expects this shape
+        return AlertDateSummaryResponse(dates=[])
+    finally:
+        db.close()
+
+# ===== END: ALERT DATE SUMMARY ENDPOINT =====
 
 @app.post("/alerts", response_model=AlertOut)
 def create_alert(payload: AlertCreate):
