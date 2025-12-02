@@ -1247,6 +1247,44 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
 
 def process_alert(alert: Alert, db: Session) -> None:
     now = datetime.utcnow()
+
+    # Find the user for this alert
+    user = db.query(AppUser).filter(AppUser.email == alert.user_email).first()
+
+    # If there is no user, record and skip
+    if not user:
+        run_row = AlertRun(
+            id=str(uuid4()),
+            alert_id=alert.id,
+            run_at=now,
+            price_found=None,
+            sent=False,
+            reason="no_user_for_alert",
+        )
+        db.add(run_row)
+
+        alert.last_run_at = now
+        alert.updated_at = now
+        db.commit()
+        return
+
+    # Check master, global and per user switches
+    if not should_send_alert(db, user):
+        run_row = AlertRun(
+            id=str(uuid4()),
+            alert_id=alert.id,
+            run_at=now,
+            price_found=None,
+            sent=False,
+            reason="alerts_disabled",
+        )
+        db.add(run_row)
+
+        alert.last_run_at = now
+        alert.updated_at = now
+        db.commit()
+        return
+
     params = build_search_params_for_alert(alert)
 
     options = run_duffel_scan(params)
@@ -1322,6 +1360,11 @@ def process_alert(alert: Alert, db: Session) -> None:
 
 
 def run_all_alerts_cycle() -> None:
+    # Hard master switch from environment
+    if not master_alerts_enabled():
+        print("[alerts] ALERTS_ENABLED is false, skipping alerts cycle")
+        return
+
     if not DUFFEL_ACCESS_TOKEN:
         print("[alerts] DUFFEL_ACCESS_TOKEN not set, skipping alerts cycle")
         return
@@ -1332,6 +1375,11 @@ def run_all_alerts_cycle() -> None:
 
     db = SessionLocal()
     try:
+        # Global switch from admin_config
+        if not alerts_globally_enabled(db):
+            print("[alerts] Global alerts disabled in admin_config, skipping alerts cycle")
+            return
+
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
         print(f"[alerts] Running alerts cycle for {len(alerts)} alerts")
 
