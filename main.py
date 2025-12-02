@@ -128,11 +128,8 @@ class FlightOption(BaseModel):
     returnDate: str
     stops: int
 
-    # Duration for the outbound leg only
     durationMinutes: int
-    # Total duration for both legs if available
     totalDurationMinutes: Optional[int] = None
-    # ISO style representation of durationMinutes
     duration: Optional[str] = None
 
     origin: Optional[str] = None
@@ -143,7 +140,6 @@ class FlightOption(BaseModel):
     stopoverCodes: Optional[List[str]] = None
     stopoverAirports: Optional[List[str]] = None
 
-    # Separate segment lists for outbound and return legs
     outboundSegments: Optional[List[Dict[str, Any]]] = None
     returnSegments: Optional[List[Dict[str, Any]]] = None
 
@@ -253,6 +249,11 @@ class AlertUpdatePayload(BaseModel):
     return_end: Optional[date] = None
 
 
+class AlertStatusPayload(BaseModel):
+    is_active: Optional[bool] = None
+    isActive: Optional[bool] = None
+
+
 class AlertBase(BaseModel):
     email: str
     origin: str
@@ -345,7 +346,6 @@ WATCH_END_DATE = os.getenv("WATCH_END_DATE")
 WATCH_STAY_NIGHTS = int(os.getenv("WATCH_STAY_NIGHTS", "7"))
 WATCH_MAX_PRICE = float(os.getenv("WATCH_MAX_PRICE", "720"))
 
-# Environment level hard kill switch
 ALERTS_ENABLED = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
 
 # ===== END SECTION: ENV, DUFFEL AND EMAIL CONFIG =====
@@ -772,7 +772,7 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
             collected_offers.append((offer, dep, ret))
             total_count += 1
             if total_count >= max_offers_total:
-            break
+                break
 
     mapped: List[FlightOption] = [
         map_duffel_offer_to_option(offer, dep, ret)
@@ -925,7 +925,7 @@ def run_search_job(job_id: str):
 
                     if total_count >= max_offers_total:
                         print(f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping")
-                       	break
+                        break
 
                 if total_count >= max_offers_total:
                     break
@@ -1109,11 +1109,6 @@ def run_price_watch() -> Dict[str, Any]:
 # =======================================
 
 def build_search_params_for_alert(alert: Alert) -> SearchParams:
-    """
-    Convert an Alert DB row into SearchParams for Duffel.
-    Uses departure_start and departure_end as the departure window
-    and infers a stay range from the return dates if available.
-    """
     dep_start = alert.departure_start
     dep_end = alert.departure_end or alert.departure_start
 
@@ -1139,10 +1134,6 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
 
 
 def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: SearchParams) -> None:
-    """
-    Send a single alert email to the user_email on the alert row.
-    Uses the same SMTP2Go settings as the test and watch emails.
-    """
     if not (SMTP_USERNAME and SMTP_PASSWORD):
         raise HTTPException(
             status_code=500,
@@ -1200,10 +1191,6 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
 
 
 def process_alert(alert: Alert, db: Session) -> None:
-    """
-    Run a Duffel scan for a single alert, decide whether to send an email,
-    update alert state and create an AlertRun row.
-    """
     now = datetime.utcnow()
     params = build_search_params_for_alert(alert)
 
@@ -1280,11 +1267,6 @@ def process_alert(alert: Alert, db: Session) -> None:
 
 
 def run_all_alerts_cycle() -> None:
-    """
-    Main alert engine entry point.
-    Called by /trigger-daily-alert via BackgroundTasks.
-    Scans all active alerts, runs Duffel searches and sends emails where needed.
-    """
     if not DUFFEL_ACCESS_TOKEN:
         print("[alerts] DUFFEL_ACCESS_TOKEN not set, skipping alerts cycle")
         return
@@ -1511,16 +1493,13 @@ def test_email_alert():
 
 @app.get("/trigger-daily-alert")
 def trigger_daily_alert(background_tasks: BackgroundTasks):
-    # Environment level kill switch
     if not ALERTS_ENABLED:
         return {"detail": "Alerts are currently disabled via environment"}
 
-    # System level kill switch controlled from Directus admin_config
     system_enabled = get_config_bool("ALERTS_SYSTEM_ENABLED", True)
     if not system_enabled:
         return {"detail": "Alerts are currently disabled in admin config"}
 
-    # For live user alerts we now use run_all_alerts_cycle, not the single watch
     background_tasks.add_task(run_all_alerts_cycle)
     return {"detail": "Alerts cycle queued"}
 
@@ -1832,9 +1811,6 @@ def public_config():
 
 @app.post("/user-sync")
 def user_sync(payload: UserSyncPayload):
-    """
-    Accept user profile from Base44 and upsert into app_users.
-    """
     db = SessionLocal()
     try:
         user = (
@@ -1874,9 +1850,6 @@ def user_sync(payload: UserSyncPayload):
 def get_profile(
     x_user_id: str = Header(..., alias="X-User-Id"),
 ):
-    """
-    Return profile summary for the profile page.
-    """
     wallet_balance = USER_WALLETS.get(x_user_id, 0)
 
     db = SessionLocal()
@@ -1934,14 +1907,8 @@ def get_latest_alert_run(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    """
-    Return the most recent AlertRun for a given alert.
-    Uses existing Alert and AlertRun fields so no DB migration is needed.
-    """
-
     db = SessionLocal()
     try:
-        # Resolve user email for ownership check
         resolved_email: Optional[str] = None
         if email is not None:
             resolved_email = email
@@ -1960,7 +1927,6 @@ def get_latest_alert_run(
                 detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
             )
 
-        # Fetch alert owned by this user
         alert = (
             db.query(Alert)
             .filter(Alert.id == alert_id)
@@ -1970,7 +1936,6 @@ def get_latest_alert_run(
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
-        # Fetch latest run for this alert
         latest_run = (
             db.query(AlertRun)
             .filter(AlertRun.alert_id == alert.id)
@@ -1993,7 +1958,6 @@ def get_latest_alert_run(
             "returnEnd": alert.return_end.isoformat() if alert.return_end else None,
         }
 
-        # No runs yet
         if not latest_run:
             return {
                 "alertId": alert.id,
@@ -2002,7 +1966,6 @@ def get_latest_alert_run(
                 "run": None,
             }
 
-        # Build summary text for the UI card
         price_part = (
             f"£{latest_run.price_found}"
             if latest_run.price_found is not None
@@ -2039,10 +2002,6 @@ def get_latest_alert_run(
 
 @app.post("/alerts", response_model=AlertOut)
 def create_alert(payload: AlertCreate):
-    """
-    Create a new price alert for a user.
-    Email is taken from the payload so it can work even without authentication.
-    """
     db = SessionLocal()
     try:
         alert_id = str(uuid4())
@@ -2099,12 +2058,6 @@ def get_alerts(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    """
-    Return list of active alerts for a user.
-    Priority:
-      1. email query parameter
-      2. email resolved from X-User-Id via AppUser
-    """
     resolved_email: Optional[str] = None
 
     db = SessionLocal()
@@ -2158,7 +2111,6 @@ def get_alerts(
         db.close()
 
 
-
 @app.patch("/alerts/{alert_id}")
 def update_alert(
     alert_id: str,
@@ -2166,11 +2118,6 @@ def update_alert(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    """
-    General alert update endpoint.
-    Supports updating alert_type, max_price and date windows.
-    Used by Base44 to adjust alert frequency and settings.
-    """
     db = SessionLocal()
     try:
         resolved_email: Optional[str] = None
@@ -2253,16 +2200,26 @@ def update_alert(
 @app.patch("/alerts/{alert_id}/status")
 def update_alert_status(
     alert_id: str,
-    is_active: bool,
+    payload: AlertStatusPayload,
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     """
     Simple status toggle endpoint.
-    Matches what Base44 is already wired to call for the bell icon.
+    Accepts JSON body with is_active or isActive.
     """
     db = SessionLocal()
     try:
+        incoming_is_active = payload.is_active
+        if incoming_is_active is None:
+            incoming_is_active = payload.isActive
+
+        if incoming_is_active is None:
+            raise HTTPException(
+                status_code=400,
+                detail="is_active is required in body as is_active or isActive",
+            )
+
         resolved_email: Optional[str] = None
         if email is not None:
             resolved_email = email
@@ -2290,7 +2247,7 @@ def update_alert_status(
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
-        alert.is_active = is_active
+        alert.is_active = incoming_is_active
         alert.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(alert)
@@ -2310,10 +2267,6 @@ def delete_alert(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    """
-    Soft delete an alert by setting is_active to false.
-    Basic ownership check via email or user id if available.
-    """
     db = SessionLocal()
     try:
         alert = db.query(Alert).filter(Alert.id == alert_id).first()
