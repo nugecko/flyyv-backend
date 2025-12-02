@@ -2057,7 +2057,71 @@ def create_alert(payload: AlertCreate):
 def get_alerts(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    include_inactive: bool = False,
 ):
+    """
+    Return list of alerts for a user.
+    Priority:
+      1. email query parameter
+      2. email resolved from X-User-Id via AppUser
+
+    include_inactive:
+      false (default): return only active alerts
+      true: return all alerts for the user
+    """
+
+    resolved_email: Optional[str] = None
+
+    db = SessionLocal()
+    try:
+        if email is not None:
+            resolved_email = email
+        elif x_user_id:
+            app_user = (
+                db.query(AppUser)
+                .filter(AppUser.external_id == x_user_id)
+                .first()
+            )
+            if app_user and app_user.email:
+                resolved_email = app_user.email
+
+        if not resolved_email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
+            )
+
+        query = db.query(Alert).filter(Alert.user_email == resolved_email)
+
+        if not include_inactive:
+            query = query.filter(Alert.is_active == True)  # noqa: E712
+
+        alerts = query.order_by(Alert.created_at.desc()).all()
+
+        return [
+            AlertOut(
+                id=a.id,
+                email=a.user_email,
+                origin=a.origin,
+                destination=a.destination,
+                cabin=a.cabin,
+                departure_start=a.departure_start,
+                departure_end=a.departure_end,
+                return_start=a.return_start,
+                return_end=a.return_end,
+                alert_type=a.alert_type,
+                max_price=a.max_price,
+                times_sent=a.times_sent,
+                is_active=a.is_active,
+                last_price=a.last_price,
+                created_at=a.created_at,
+                updated_at=a.updated_at,
+            )
+            for a in alerts
+        ]
+    finally:
+        db.close()
+        
     resolved_email: Optional[str] = None
 
     db = SessionLocal()
