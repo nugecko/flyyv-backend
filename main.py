@@ -1031,6 +1031,210 @@ def run_price_watch() -> Dict[str, Any]:
 
 # ===== END SECTION: PRICE WATCH HELPERS =====
 
+# =======================================
+# SECTION: ALERT ENGINE HELPERS
+# =======================================
+
+def build_search_params_for_alert(alert: Alert) -> SearchParams:
+    """
+    Convert an Alert DB row into SearchParams for Duffel.
+    Uses departure_start / departure_end as the departure window
+    and infers a stay range from the return dates if available.
+    """
+    dep_start = alert.departure_start
+    dep_end = alert.departure_end or alert.departure_start
+
+    if alert.return_start and alert.return_end:
+        min_stay = max(1, (alert.return_start - dep_start).days)
+        max_stay = max(min_stay, (alert.return_end - dep_start).days)
+    else:
+        min_stay = 1
+        max_stay = 21
+
+    return SearchParams(
+        origin=alert.origin,
+        destination=alert.destination,
+        earliestDeparture=dep_start,
+        latestDeparture=dep_end,
+        minStayDays=min_stay,
+        maxStayDays=max_stay,
+        maxPrice=alert.max_price,
+        cabin=alert.cabin or "BUSINESS",
+        passengers=1,
+        stopsFilter=None,
+    )
+
+
+def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: SearchParams) -> None:
+    """
+    Send a single alert email to the user_email on the alert row.
+    Uses the same SMTP2Go settings as the test and watch emails.
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    to_email = alert.user_email
+    if not to_email:
+        raise HTTPException(status_code=500, detail="Alert has no user_email")
+
+    subject = (
+        f"Flyyv alert: {alert.origin} \u2192 {alert.destination} "
+        f"from £{int(cheapest.price)}"
+    )
+
+    flyyv_link = build_flyyv_link(
+        params,
+        cheapest.departureDate,
+        cheapest.returnDate,
+    )
+
+    dep_label = cheapest.departureDate
+    ret_label = cheapest.returnDate
+
+    lines: List[str] = []
+
+    lines.append(
+        f"Route: {alert.origin} \u2192 {alert.destination}, {alert.cabin.title()} class"
+    )
+    lines.append(f"Dates: {dep_label} to {ret_label}")
+    lines.append("")
+    lines.append(
+        f"Cheapest fare found: £{int(cheapest.price)} "
+        f"with {cheapest.airline} ({cheapest.airlineCode or ''})"
+    )
+    lines.append("")
+    lines.append(f"View this date pair in Flyyv:")
+    lines.append(f"{flyyv_link}")
+    lines.append("")
+    lines.append("You are receiving this because you created a Flyyv price alert.")
+    lines.append("To stop these alerts, delete the alert in your Flyyv profile.")
+
+    body = "\n".join(lines)
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+def process_alert(alert: Alert, db: Session) -> None:
+    """
+    Run a Duffel scan for a single alert, decide whether to send an email,
+    update alert state and create an AlertRun row.
+    """
+    now = datetime.utcnow()
+    params = build_search_params_for_alert(alert)
+
+    options = run_duffel_scan(params)
+
+    if not options:
+        run_row = AlertRun(
+            id=str(uuid4()),
+            alert_id=alert.id,
+            run_at=now,
+            price_found=None,
+            sent=False,
+            reason="no_results",
+        )
+        db.add(run_row)
+
+        alert.last_run_at = now
+        alert.updated_at = now
+        db.commit()
+        return
+
+    options_sorted = sorted(options, key=lambda o: o.price)
+    cheapest = options_sorted[0]
+    current_price = int(cheapest.price)
+
+    should_send = False
+    send_reason = None
+
+    if alert.alert_type == "price_change":
+        if alert.last_price is None:
+            should_send = True
+            send_reason = "initial"
+        elif current_price != alert.last_price:
+            should_send = True
+            send_reason = "price_change"
+        else:
+            should_send = False
+            send_reason = "no_change"
+    elif alert.alert_type == "scheduled_3x":
+        should_send = True
+        send_reason = "scheduled"
+    else:
+        should_send = True
+        send_reason = f"unknown_type_{alert.alert_type}"
+
+    sent_flag = False
+
+    if should_send:
+        try:
+            send_alert_email_for_alert(alert, cheapest, params)
+            sent_flag = True
+        except Exception as e:
+            print(f"[alerts] Failed to send email for alert {alert.id}: {e}")
+            sent_flag = False
+            send_reason = (send_reason or "send_attempt") + "_email_failed"
+
+    run_row = AlertRun(
+        id=str(uuid4()),
+        alert_id=alert.id,
+        run_at=now,
+        price_found=current_price,
+        sent=sent_flag,
+        reason=send_reason,
+    )
+    db.add(run_row)
+
+    alert.last_price = current_price
+    alert.last_run_at = now
+    alert.updated_at = now
+    if sent_flag:
+        alert.times_sent = (alert.times_sent or 0) + 1
+
+    db.commit()
+
+
+def run_all_alerts_cycle() -> None:
+    """
+    Main alert engine entry point.
+    Called by /trigger-daily-alert via BackgroundTasks.
+    Scans all active alerts, runs Duffel searches and sends emails where needed.
+    """
+    if not DUFFEL_ACCESS_TOKEN:
+        print("[alerts] DUFFEL_ACCESS_TOKEN not set, skipping alerts cycle")
+        return
+
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
+        print("[alerts] SMTP not fully configured, skipping alerts cycle")
+        return
+
+    db = SessionLocal()
+    try:
+        alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
+        print(f"[alerts] Running alerts cycle for {len(alerts)} alerts")
+
+        for alert in alerts:
+            try:
+                process_alert(alert, db)
+            except Exception as e:
+                print(f"[alerts] Error processing alert {alert.id}: {e}")
+    finally:
+        db.close()
+
+# ===== END SECTION: ALERT ENGINE HELPERS =====
+
 
 # =======================================
 # SECTION: EMAIL HELPERS
