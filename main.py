@@ -110,8 +110,11 @@ class FlightOption(BaseModel):
     returnDate: str
     stops: int
 
+    # Duration for the outbound leg only
     durationMinutes: int
+    # Total duration for both legs if available
     totalDurationMinutes: Optional[int] = None
+    # ISO style representation of durationMinutes
     duration: Optional[str] = None
 
     origin: Optional[str] = None
@@ -122,7 +125,9 @@ class FlightOption(BaseModel):
     stopoverCodes: Optional[List[str]] = None
     stopoverAirports: Optional[List[str]] = None
 
-    segments: Optional[List[Dict[str, Any]]] = None
+    # Separate segment lists for outbound and return legs
+    outboundSegments: Optional[List[Dict[str, Any]]] = None
+    returnSegments: Optional[List[Dict[str, Any]]] = None
 
     aircraftCodes: Optional[List[str]] = None
     aircraftNames: Optional[List[str]] = None
@@ -441,25 +446,25 @@ def map_duffel_offer_to_option(
     booking_url = AIRLINE_BOOKING_URL.get(airline_code) if isinstance(AIRLINE_BOOKING_URL, dict) else None
 
     slices = offer.get("slices", []) or []
-    outbound_segments: List[dict] = []
-    return_segments: List[dict] = []
+    outbound_segments_json: List[dict] = []
+    return_segments_json: List[dict] = []
 
     if len(slices) >= 1:
-        outbound_segments = slices[0].get("segments", []) or []
+        outbound_segments_json = slices[0].get("segments", []) or []
     if len(slices) >= 2:
-        return_segments = slices[1].get("segments", []) or []
+        return_segments_json = slices[1].get("segments", []) or []
 
-    stops_outbound = max(0, len(outbound_segments) - 1)
+    stops_outbound = max(0, len(outbound_segments_json) - 1)
 
-    duration_minutes = 0
     origin_code = None
     destination_code = None
     origin_airport = None
     destination_airport = None
 
-    if outbound_segments:
-        first_segment = outbound_segments[0]
-        last_segment = outbound_segments[-1]
+    # Determine overall origin and destination from outbound segments
+    if outbound_segments_json:
+        first_segment = outbound_segments_json[0]
+        last_segment = outbound_segments_json[-1]
 
         origin_obj = first_segment.get("origin", {}) or {}
         dest_obj = last_segment.get("destination", {}) or {}
@@ -469,35 +474,29 @@ def map_duffel_offer_to_option(
         origin_airport = origin_obj.get("name")
         destination_airport = dest_obj.get("name")
 
-        dep_at = first_segment.get("departing_at")
-        arr_at = last_segment.get("arriving_at")
-
-        try:
-            dep_dt = datetime.fromisoformat(dep_at.replace("Z", "+00:00"))
-            arr_dt = datetime.fromisoformat(arr_at.replace("Z", "+00:00"))
-            duration_minutes = int((arr_dt - dep_dt).total_seconds() // 60)
-        except Exception:
-            duration_minutes = 0
-
-    iso_duration = build_iso_duration(duration_minutes)
-
-    stopover_codes: List[str] = []
-    stopover_airports: List[str] = []
-    if len(outbound_segments) > 1:
-        for seg in outbound_segments[:-1]:
-            dest_obj = seg.get("destination", {}) or {}
-            code = dest_obj.get("iata_code")
-            name = dest_obj.get("name")
-            if code:
-                stopover_codes.append(code)
-            if name:
-                stopover_airports.append(name)
-
-    segments_info: List[Dict[str, Any]] = []
+    # Per segment arrays and total minutes
+    outbound_segments_info: List[Dict[str, Any]] = []
+    return_segments_info: List[Dict[str, Any]] = []
     aircraft_codes: List[str] = []
     aircraft_names: List[str] = []
 
-    for direction, seg_list in (("outbound", outbound_segments), ("return", return_segments)):
+    outbound_total_minutes = 0
+    return_total_minutes = 0
+
+    def parse_iso(dt_str: Optional[str]) -> Optional[datetime]:
+        if not dt_str:
+            return None
+        try:
+            # Duffel uses Z suffix for UTC
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    # Helper to process a list of segments for one direction
+    def process_segment_list(direction: str, seg_list: List[dict]) -> Tuple[List[Dict[str, Any]], int]:
+        result: List[Dict[str, Any]] = []
+        total_minutes = 0
+
         for idx, seg in enumerate(seg_list):
             o = seg.get("origin", {}) or {}
             d = seg.get("destination", {}) or {}
@@ -511,31 +510,83 @@ def map_duffel_offer_to_option(
             if aircraft_name:
                 aircraft_names.append(aircraft_name)
 
+            dep_at_str = seg.get("departing_at")
+            arr_at_str = seg.get("arriving_at")
+
+            dep_dt = parse_iso(dep_at_str)
+            arr_dt = parse_iso(arr_at_str)
+
+            duration_minutes_seg: Optional[int] = None
+            if dep_dt and arr_dt:
+                try:
+                    duration_minutes_seg = int((arr_dt - dep_dt).total_seconds() // 60)
+                except Exception:
+                    duration_minutes_seg = None
+
             layover_minutes_to_next: Optional[int] = None
             if idx < len(seg_list) - 1:
-                this_arr = seg.get("arriving_at")
-                next_dep = seg_list[idx + 1].get("departing_at")
-                try:
-                    this_arr_dt = datetime.fromisoformat(this_arr.replace("Z", "+00:00"))
-                    next_dep_dt = datetime.fromisoformat(next_dep.replace("Z", "+00:00"))
-                    layover_minutes_to_next = int((next_dep_dt - this_arr_dt).total_seconds() // 60)
-                except Exception:
-                    layover_minutes_to_next = None
+                this_arr_str = seg.get("arriving_at")
+                next_dep_str = seg_list[idx + 1].get("departing_at")
+                this_arr_dt = parse_iso(this_arr_str)
+                next_dep_dt = parse_iso(next_dep_str)
+                if this_arr_dt and next_dep_dt:
+                    try:
+                        layover_minutes_to_next = int((next_dep_dt - this_arr_dt).total_seconds() // 60)
+                    except Exception:
+                        layover_minutes_to_next = None
 
-            segments_info.append(
+            if duration_minutes_seg is None:
+                # If we fail to parse, treat as zero for totals
+                duration_minutes_seg = 0
+
+            total_minutes_local = duration_minutes_seg
+            total_minutes += total_minutes_local
+
+            result.append(
                 {
                     "direction": direction,
                     "origin": o.get("iata_code"),
                     "originAirport": o.get("name"),
                     "destination": d.get("iata_code"),
                     "destinationAirport": d.get("name"),
-                    "departingAt": seg.get("departing_at"),
-                    "arrivingAt": seg.get("arriving_at"),
+                    "departingAt": dep_at_str,
+                    "arrivingAt": arr_at_str,
                     "aircraftCode": aircraft_code,
                     "aircraftName": aircraft_name,
+                    "durationMinutes": duration_minutes_seg,
                     "layoverMinutesToNext": layover_minutes_to_next,
                 }
             )
+
+        return result, total_minutes
+
+    # Process outbound and return segments separately
+    outbound_segments_info, outbound_total_minutes = process_segment_list("outbound", outbound_segments_json)
+    return_segments_info, return_total_minutes = process_segment_list("return", return_segments_json)
+
+    # Outbound duration for the card
+    duration_minutes = outbound_total_minutes
+
+    # Total duration if both legs available
+    if outbound_total_minutes or return_total_minutes:
+        total_duration_minutes = outbound_total_minutes + return_total_minutes
+    else:
+        total_duration_minutes = duration_minutes
+
+    iso_duration = build_iso_duration(duration_minutes)
+
+    # Stopover codes and names from outbound segments only
+    stopover_codes: List[str] = []
+    stopover_airports: List[str] = []
+    if len(outbound_segments_json) > 1:
+        for seg in outbound_segments_json[:-1]:
+            dest_obj = seg.get("destination", {}) or {}
+            code = dest_obj.get("iata_code")
+            name = dest_obj.get("name")
+            if code:
+                stopover_codes.append(code)
+            if name:
+                stopover_airports.append(name)
 
     return FlightOption(
         id=offer.get("id", ""),
@@ -547,7 +598,7 @@ def map_duffel_offer_to_option(
         returnDate=ret.isoformat(),
         stops=stops_outbound,
         durationMinutes=duration_minutes,
-        totalDurationMinutes=duration_minutes,
+        totalDurationMinutes=total_duration_minutes,
         duration=iso_duration,
         origin=origin_code,
         destination=destination_code,
@@ -555,7 +606,8 @@ def map_duffel_offer_to_option(
         destinationAirport=destination_airport,
         stopoverCodes=stopover_codes or None,
         stopoverAirports=stopover_airports or None,
-        segments=segments_info or None,
+        outboundSegments=outbound_segments_info or None,
+        returnSegments=return_segments_info or None,
         aircraftCodes=aircraft_codes or None,
         aircraftNames=aircraft_names or None,
         bookingUrl=booking_url,
