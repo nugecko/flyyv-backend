@@ -756,7 +756,6 @@ def balance_airlines(
 
 # ===== END SECTION: FILTERING AND BALANCING =====
 
-
 # =======================================
 # SECTION: SHARED SEARCH HELPERS
 # =======================================
@@ -790,9 +789,22 @@ def estimate_date_pairs(params: SearchParams) -> int:
 
 
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
+    print(
+        f"[search] run_duffel_scan START origin={params.origin} "
+        f"dest={params.destination}"
+    )
+
     max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
+    print(
+        f"[search] caps max_pairs={max_pairs} "
+        f"max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}"
+    )
+
     date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
+    print(f"[search] generated {len(date_pairs)} date pairs")
+
     if not date_pairs:
+        print("[search] no date pairs generated, returning empty list")
         return []
 
     collected_offers: List[Tuple[dict, date, date]] = []
@@ -800,11 +812,28 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
     for dep, ret in date_pairs:
         if total_count >= max_offers_total:
+            print(
+                f"[search] total_count {total_count} reached max_offers_total "
+                f"{max_offers_total}, stopping"
+            )
             break
 
+        print(
+            f"[search] querying Duffel for pair dep={dep} ret={ret} "
+            f"current_total={total_count}"
+        )
+
         slices = [
-            {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
-            {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
+            {
+                "origin": params.origin,
+                "destination": params.destination,
+                "departure_date": dep.isoformat(),
+            },
+            {
+                "origin": params.destination,
+                "destination": params.origin,
+                "departure_date": ret.isoformat(),
+            },
         ]
         pax = [{"type": "adult"} for _ in range(params.passengers)]
 
@@ -812,34 +841,58 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
             offer_request = duffel_create_offer_request(slices, pax, params.cabin)
             offer_request_id = offer_request.get("id")
             if not offer_request_id:
+                print("[search] Duffel offer_request returned no id, skipping pair")
                 continue
 
             per_pair_limit = min(max_offers_pair, max_offers_total - total_count)
+            print(
+                f"[search] listing offers for request_id={offer_request_id} "
+                f"per_pair_limit={per_pair_limit}"
+            )
             offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
         except HTTPException as e:
-            print("Duffel error for", dep, "to", ret, ":", e.detail)
+            print(
+                f"[search] Duffel HTTPException for dep={dep} ret={ret}: {e.detail}"
+            )
             continue
         except Exception as e:
-            print("Unexpected Duffel error for", dep, "to", ret, ":", e)
+            print(f"[search] Unexpected Duffel error for dep={dep} ret={ret}: {e}")
             continue
+
+        num_offers = len(offers_json)
+        print(
+            f"[search] Duffel returned {num_offers} offers for dep={dep} ret={ret}"
+        )
 
         for offer in offers_json:
             collected_offers.append((offer, dep, ret))
             total_count += 1
             if total_count >= max_offers_total:
+                print(
+                    f"[search] reached max_offers_total={max_offers_total} "
+                    f"while collecting offers, breaking inner loop"
+                )
                 break
+
+    print(
+        f"[search] collected total {len(collected_offers)} offers across all pairs"
+    )
 
     mapped: List[FlightOption] = [
         map_duffel_offer_to_option(offer, dep, ret)
         for offer, dep, ret in collected_offers
     ]
+    print(f"[search] mapped {len(mapped)} offers to FlightOption")
 
     filtered = apply_filters(mapped, params)
+    print(f"[search] filtered down to {len(filtered)} offers")
+
     balanced = balance_airlines(filtered, max_total=max_offers_total)
+    print(f"[search] balance_airlines returned {len(balanced)} offers")
+    print("[search] run_duffel_scan DONE")
     return balanced
 
 # ===== END SECTION: SHARED SEARCH HELPERS =====
-
 
 # =======================================
 # SECTION: ASYNC JOB RUNNER
