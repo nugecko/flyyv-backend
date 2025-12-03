@@ -1264,16 +1264,10 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
         f"from £{int(cheapest.price)}"
     )
 
-    flyyv_link = build_flyyv_link(
-        params,
-        cheapest.departureDate,
-        cheapest.returnDate,
-    )
-
     dep_label = cheapest.departureDate
     ret_label = cheapest.returnDate
 
-        lines: List[str] = []
+    lines: List[str] = []
 
     lines.append(
         f"Route: {alert.origin} \u2192 {alert.destination}, {alert.cabin.title()} class"
