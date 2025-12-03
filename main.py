@@ -1304,6 +1304,127 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
 
+def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: SearchParams) -> None:
+    """
+    Smart alert email, simple list format:
+    one line per best date pair, sorted by price.
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP settings are not fully configured on the server",
+        )
+
+    to_email = alert.user_email
+    if not to_email:
+        raise HTTPException(status_code=500, detail="Alert has no user_email")
+
+    # Build a map of best price per date pair
+    pair_best: Dict[Tuple[Any, Any], FlightOption] = {}
+    for opt in options:
+        key = (opt.departureDate, opt.returnDate)
+        existing = pair_best.get(key)
+        if existing is None or float(opt.price) < float(existing.price):
+            pair_best[key] = opt
+
+    best_pairs: List[FlightOption] = list(pair_best.values())
+    if not best_pairs:
+        # Nothing sensible to send
+        return
+
+    best_pairs_sorted = sorted(best_pairs, key=lambda o: float(o.price))
+    # Limit how many lines we show in the email
+    max_pairs_to_show = 15
+    best_pairs_sorted = best_pairs_sorted[:max_pairs_to_show]
+
+    cheapest = best_pairs_sorted[0]
+    cheapest_price = int(cheapest.price)
+
+    subject = (
+        f"Flyyv smart alert: {alert.origin} \u2192 {alert.destination} "
+        f"from £{cheapest_price}"
+    )
+
+    # Prepare lines
+    lines: List[str] = []
+    cabin_label = (alert.cabin or "BUSINESS").title()
+
+    lines.append(
+        f"Route: {alert.origin} \u2192 {alert.destination}, {cabin_label} class"
+    )
+    lines.append(
+        f"Smart window: {params.earliestDeparture} to {params.latestDeparture}"
+    )
+    lines.append("")
+    lines.append(f"Cheapest fare in this window: £{cheapest_price}")
+    lines.append(f"Best {len(best_pairs_sorted)} date combinations:")
+    lines.append("")
+
+    from datetime import date as _date_type
+
+    for opt in best_pairs_sorted:
+        dep = opt.departureDate
+        ret = opt.returnDate
+
+        # Format dates
+        if isinstance(dep, _date_type):
+            dep_label = dep.isoformat()
+        else:
+            dep_label = str(dep)
+
+        if isinstance(ret, _date_type):
+            ret_label = ret.isoformat()
+        else:
+            ret_label = str(ret)
+
+        # Nights length, when possible
+        nights_part = ""
+        if isinstance(dep, _date_type) and isinstance(ret, _date_type):
+            nights = (ret - dep).days
+            if nights > 0:
+                nights_part = f" ({nights} nights)"
+
+        airline_part = opt.airline or ""
+        if opt.airlineCode:
+            airline_part = f"{airline_part} ({opt.airlineCode})".strip()
+
+        line = f"£{int(opt.price)}: {dep_label} \u2192 {ret_label}{nights_part}"
+        if airline_part:
+            line += f", {airline_part}"
+
+        lines.append(line)
+
+    lines.append("")
+    # Link for the cheapest date pair
+    try:
+        flyyv_link = build_flyyv_link(
+            params,
+            cheapest.departureDate,
+            cheapest.returnDate,
+        )
+        lines.append("View the cheapest date pair in Flyyv:")
+        lines.append(f"{flyyv_link}")
+        lines.append("")
+    except Exception:
+        # If link building ever fails, we still send the email
+        lines.append("You can view these dates in the Flyyv app.")
+        lines.append("")
+
+    lines.append("You are receiving this because you created a Flyyv price alert.")
+    lines.append("To stop these alerts, delete the alert in your Flyyv profile.")
+
+    body = "\n".join(lines)
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = ALERT_FROM_EMAIL
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
 
 def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: SearchParams) -> None:
     """
@@ -1581,14 +1702,17 @@ def process_alert(alert: Alert, db: Session) -> None:
         f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
     )
 
-    sent_flag = False
+        sent_flag = False
 
     if should_send:
         try:
             if alert.mode == "smart":
-                send_smart_alert_email(alert, options, params)
+                # Smart alerts get a summary email with multiple date pairs
+                send_smart_alert_email(alert, options_sorted, params)
             else:
+                # Single mode keeps the simple one date pair email
                 send_alert_email_for_alert(alert, cheapest, params)
+
             sent_flag = True
             print(f"[alerts] process_alert EMAIL_SENT id={alert.id} mode={alert.mode}")
         except Exception as e:
