@@ -2248,6 +2248,10 @@ def get_alert_date_summary(
 
 # ===== END: ALERT DATE SUMMARY ENDPOINT =====
 
+# =======================================
+# SECTION: ALERT ROUTES
+# =======================================
+
 @app.post("/alerts", response_model=AlertOut)
 def create_alert(payload: AlertCreate):
     db = SessionLocal()
@@ -2255,6 +2259,8 @@ def create_alert(payload: AlertCreate):
         alert_id = str(uuid4())
         now = datetime.utcnow()
 
+        # For now all alerts created through this endpoint are specific date alerts
+        # so we set mode="single". Later we will extend this to support "smart".
         alert = Alert(
             id=alert_id,
             user_email=payload.email,
@@ -2267,6 +2273,7 @@ def create_alert(payload: AlertCreate):
             return_end=payload.return_end,
             alert_type=payload.alert_type,
             max_price=payload.max_price,
+            mode="single",
             last_price=None,
             last_run_at=None,
             times_sent=0,
@@ -2345,58 +2352,6 @@ def get_alerts(
             query = query.filter(Alert.is_active == True)  # noqa: E712
 
         alerts = query.order_by(Alert.created_at.desc()).all()
-
-        return [
-            AlertOut(
-                id=a.id,
-                email=a.user_email,
-                origin=a.origin,
-                destination=a.destination,
-                cabin=a.cabin,
-                departure_start=a.departure_start,
-                departure_end=a.departure_end,
-                return_start=a.return_start,
-                return_end=a.return_end,
-                alert_type=a.alert_type,
-                max_price=a.max_price,
-                times_sent=a.times_sent,
-                is_active=a.is_active,
-                last_price=a.last_price,
-                created_at=a.created_at,
-                updated_at=a.updated_at,
-            )
-            for a in alerts
-        ]
-    finally:
-        db.close()
-        
-    resolved_email: Optional[str] = None
-
-    db = SessionLocal()
-    try:
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
-            if app_user and app_user.email:
-                resolved_email = app_user.email
-
-        if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
-
-        alerts = (
-            db.query(Alert)
-            .filter(Alert.user_email == resolved_email, Alert.is_active == True)  # noqa: E712
-            .order_by(Alert.created_at.desc())
-            .all()
-        )
 
         return [
             AlertOut(
@@ -2608,4 +2563,4 @@ def delete_alert(
     finally:
         db.close()
 
-# ===== END SECTION: PUBLIC CONFIG, USER SYNC, PROFILE, ALERTS =====
+# ===== END SECTION: ALERT ROUTES =====
