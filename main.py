@@ -2266,8 +2266,14 @@ def create_alert(payload: AlertCreate):
         alert_id = str(uuid4())
         now = datetime.utcnow()
 
-        # For now all alerts created through this endpoint are specific date alerts
-        # so we set mode="single". Later we will extend this to support "smart".
+        # Decide mode from payload, default to "single"
+        mode_value = payload.mode or "single"
+        if mode_value not in ("single", "smart"):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid alert mode, expected 'single' or 'smart'",
+            )
+
         alert = Alert(
             id=alert_id,
             user_email=payload.email,
@@ -2280,7 +2286,7 @@ def create_alert(payload: AlertCreate):
             return_end=payload.return_end,
             alert_type=payload.alert_type,
             max_price=payload.max_price,
-            mode="single",
+            mode=mode_value,
             last_price=None,
             last_run_at=None,
             times_sent=0,
@@ -2305,6 +2311,7 @@ def create_alert(payload: AlertCreate):
             return_end=alert.return_end,
             alert_type=alert.alert_type,
             max_price=alert.max_price,
+            mode=alert.mode,
             times_sent=alert.times_sent,
             is_active=alert.is_active,
             last_price=alert.last_price,
@@ -2373,6 +2380,7 @@ def get_alerts(
                 return_end=a.return_end,
                 alert_type=a.alert_type,
                 max_price=a.max_price,
+                mode=a.mode,
                 times_sent=a.times_sent,
                 is_active=a.is_active,
                 last_price=a.last_price,
@@ -2442,6 +2450,14 @@ def update_alert(
         if payload.return_end is not None:
             alert.return_end = payload.return_end
 
+        if payload.mode is not None:
+            if payload.mode not in ("single", "smart"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid alert mode, expected 'single' or 'smart'",
+                )
+            alert.mode = payload.mode
+
         alert.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(alert)
@@ -2460,6 +2476,7 @@ def update_alert(
                 return_end=alert.return_end,
                 alert_type=alert.alert_type,
                 max_price=alert.max_price,
+                mode=alert.mode,
                 times_sent=alert.times_sent,
                 is_active=alert.is_active,
                 last_price=alert.last_price,
