@@ -1227,6 +1227,8 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         min_stay = 1
         max_stay = 21
 
+    # Alerts should be lighter than full user searches
+    # so we deliberately cap the offer counts here.
     return SearchParams(
         origin=alert.origin,
         destination=alert.destination,
@@ -1238,6 +1240,8 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         cabin=alert.cabin or "BUSINESS",
         passengers=1,
         stopsFilter=None,
+        maxOffersPerPair=60,
+        maxOffersTotal=300,
     )
 
 
@@ -1348,7 +1352,8 @@ def process_alert(alert: Alert, db: Session) -> None:
     print(
         f"[alerts] process_alert SEARCH id={alert.id} "
         f"origin={params.origin} dest={params.destination} "
-        f"dep_window={params.earliestDeparture}..{params.latestDeparture}"
+        f"dep_window={params.earliestDeparture}..{params.latestDeparture} "
+        f"caps={params.maxOffersPerPair}/{params.maxOffersTotal}"
     )
 
     options = run_duffel_scan(params)
