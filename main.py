@@ -1565,18 +1565,18 @@ def process_alert(alert: Alert, db: Session) -> None:
         else:
             should_send = False
             send_reason = "no_change"
-    elif alert.alert_type == "scheduled_3x":
-        should_send = True
-        send_reason = "scheduled"
-    else:
-        should_send = True
-        send_reason = f"unknown_type_{alert.alert_type}"
+   elif alert.alert_type == "scheduled_3x":
+    should_send = True
+    send_reason = "scheduled"
+else:
+    should_send = True
+    send_reason = f"unknown_type_{alert.alert_type}"
 
-        print(
-        f"[alerts] process_alert DECISION id={alert.id} "
-        f"should_send={should_send} reason={send_reason} "
-        f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
-    )
+print(
+    f"[alerts] process_alert DECISION id={alert.id} "
+    f"should_send={should_send} reason={send_reason} "
+    f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
+)
 
     sent_flag = False
 
