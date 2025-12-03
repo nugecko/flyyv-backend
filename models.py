@@ -1,3 +1,7 @@
+# =======================================
+# SECTION: IMPORTS AND BASE
+# =======================================
+
 from datetime import datetime
 from sqlalchemy import (
     Column,
@@ -8,10 +12,14 @@ from sqlalchemy import (
     Date,
     Numeric,
     ForeignKey,
-    Text
+    Text,
 )
 from db import Base
 
+
+# =======================================
+# SECTION: ADMIN CONFIG MODEL
+# =======================================
 
 class AdminConfig(Base):
     __tablename__ = "admin_config"
@@ -24,6 +32,10 @@ class AdminConfig(Base):
     # Global master switch for alerts
     alerts_enabled = Column(Boolean, nullable=False, default=True)
 
+
+# =======================================
+# SECTION: USER MODELS
+# =======================================
 
 class AppUser(Base):
     __tablename__ = "app_users"
@@ -51,6 +63,10 @@ class AppUser(Base):
     )
 
 
+# =======================================
+# SECTION: ALERT MODELS
+# =======================================
+
 class Alert(Base):
     __tablename__ = "alerts"
 
@@ -68,6 +84,10 @@ class Alert(Base):
 
     alert_type = Column(String, nullable=False)
     max_price = Column(Integer, nullable=True)
+
+    # single = specific date pair
+    # smart  = smart search / date range based
+    mode = Column(String(32), nullable=False, default="single")
 
     last_price = Column(Integer, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
