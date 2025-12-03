@@ -1304,6 +1304,7 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
 
+
 def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: SearchParams) -> None:
     """
     Build a Smart Search style summary email over many date pairs.
@@ -1400,7 +1401,7 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
             f"{alert.cabin.title()} class, {nights_label}, 1 pax"
         )
 
-        lines.append(f"Date window: {start_label} to {end_label}")
+    lines.append(f"Date window: {start_label} to {end_label}")
     lines.append("")
 
     # Short intro
@@ -1472,6 +1473,7 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
         server.starttls()
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
+
 
 def process_alert(alert: Alert, db: Session) -> None:
     now = datetime.utcnow()
@@ -1565,18 +1567,18 @@ def process_alert(alert: Alert, db: Session) -> None:
         else:
             should_send = False
             send_reason = "no_change"
-   elif alert.alert_type == "scheduled_3x":
-    should_send = True
-    send_reason = "scheduled"
-else:
-    should_send = True
-    send_reason = f"unknown_type_{alert.alert_type}"
+    elif alert.alert_type == "scheduled_3x":
+        should_send = True
+        send_reason = "scheduled"
+    else:
+        should_send = True
+        send_reason = f"unknown_type_{alert.alert_type}"
 
-print(
-    f"[alerts] process_alert DECISION id={alert.id} "
-    f"should_send={should_send} reason={send_reason} "
-    f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
-)
+    print(
+        f"[alerts] process_alert DECISION id={alert.id} "
+        f"should_send={should_send} reason={send_reason} "
+        f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
+    )
 
     sent_flag = False
 
