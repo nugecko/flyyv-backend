@@ -1,8 +1,9 @@
 {
   "cron": [
     {
-      "command": "curl -s https://api.flyyv.com/trigger-daily-alert >/dev/null 2>&1",
-      "schedule": "*/10 * * * *"
+      "command": "python -c \"from main import run_all_alerts_cycle; run_all_alerts_cycle()\"",
+      "schedule": "*/10 * * * *",
+      "concurrency_policy": "allow"
     }
   ]
 }
