@@ -1,9 +1,8 @@
 {
   "cron": [
     {
-      "command": "python -c \"from main import run_all_alerts_cycle; run_all_alerts_cycle()\"",
-      "schedule": "*/10 * * * *",
-      "concurrency_policy": "allow"
+      "command": "python run_alerts_cycle.py",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
