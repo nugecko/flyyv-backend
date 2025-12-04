@@ -1399,22 +1399,15 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
 
     lines: List[str] = []
 
-    nights_label = (
-        f"{params.minStayDays} to {params.maxStayDays} nights"
-        if params.minStayDays != params.maxStayDays
-        else f"{params.minStayDays} nights"
-    )
-
     if threshold is not None:
         lines.append(
             f"Smart watch: {origin} \u2192 {destination}, "
-            f"{alert.cabin.title()} class, {nights_label}, "
-            f"1 pax, max £{int(threshold)}"
+            f"{alert.cabin.title()} class, max £{int(threshold)}"
         )
     else:
         lines.append(
             f"Smart watch: {origin} \u2192 {destination}, "
-            f"{alert.cabin.title()} class, {nights_label}, 1 pax"
+            f"{alert.cabin.title()} class"
         )
 
     lines.append(f"Date window: {start_label} to {end_label}")
@@ -1422,9 +1415,9 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
 
     # Short intro
     if threshold is not None:
-        lines.append(f"Max: £{int(threshold)}, 1 pax, {nights_label}")
+        lines.append(f"Max budget: £{int(threshold)}")
     else:
-        lines.append(f"Trip details: 1 pax, {nights_label}")
+        lines.append("Trip details:")
     lines.append("")
     lines.append("We scanned many date combinations in this window and picked the best options for you.")
     lines.append("")
@@ -1455,14 +1448,13 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
             ret_dt = datetime.fromisoformat(p["returnDate"])
             dep_label = dep_dt.strftime("%d %b")
             ret_label = ret_dt.strftime("%d %b")
-            nights = (ret_dt - dep_dt).days
 
             price_label = int(p["cheapestPrice"])
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
 
             line = (
                 f"£{price_label}, {dep_label} \u2192 {ret_label}, "
-                f"{airline_label}, {nights} nights"
+                f"{airline_label}"
             )
 
             if threshold is not None and float(price_label) <= float(threshold):
