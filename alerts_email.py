@@ -225,7 +225,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         if p.get("totalFlights", 0) > 0 and p.get("cheapestPrice") is not None
     ]
 
-        if not top_pairs:
+    if not top_pairs:
         lines.append("No flights were found in this window in the latest scan.")
     else:
         MAX_RESULTS = 10
@@ -255,7 +255,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                 line += "  (within your limit)"
 
             lines.append(line)
-
+            
     lines.append("")
     lines.append("View and manage your alerts:")
     lines.append("https://flyyv.com")
