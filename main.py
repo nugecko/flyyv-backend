@@ -906,6 +906,47 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION: ASYNC JOB RUNNER
 # =======================================
 
+def process_date_pair_offers(
+    params: SearchParams,
+    dep: date,
+    ret: date,
+    max_offers_pair: int,
+) -> List[FlightOption]:
+    slices = [
+        {
+            "origin": params.origin,
+            "destination": params.destination,
+            "departure_date": dep.isoformat(),
+        },
+        {
+            "origin": params.destination,
+            "destination": params.origin,
+            "departure_date": ret.isoformat(),
+        },
+    ]
+    pax = [{"type": "adult"} for _ in range(params.passengers)]
+
+    try:
+        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
+        offer_request_id = offer_request.get("id")
+        if not offer_request_id:
+            print(f"[PAIR {dep} -> {ret}] No offer_request id")
+            return []
+
+        offers_json = duffel_list_offers(offer_request_id, limit=max_offers_pair)
+    except HTTPException as e:
+        print(f"[PAIR {dep} -> {ret}] Duffel HTTPException: {e.detail}")
+        return []
+    except Exception as e:
+        print(f"[PAIR {dep} -> {ret}] Unexpected Duffel error: {e}")
+        return []
+
+    batch_mapped: List[FlightOption] = [
+        map_duffel_offer_to_option(offer, dep, ret) for offer in offers_json
+    ]
+    return batch_mapped
+
+
 def run_search_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
@@ -1007,7 +1048,6 @@ def run_search_job(job_id: str):
                             break
 
                 except Exception as e:
-                    # This usually means the batch timed out waiting for Duffel
                     error_msg = (
                         f"Timed out or failed waiting for batch Duffel responses "
                         f"after {batch_timeout_seconds} seconds: {e}"
