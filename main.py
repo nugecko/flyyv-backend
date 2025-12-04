@@ -316,6 +316,7 @@ class AlertBase(BaseModel):
     origin: str
     destination: str
     cabin: str
+    search_mode: Optional[str] = "flexible"
 
     departure_start: date
     departure_end: date
