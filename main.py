@@ -1450,7 +1450,7 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
         lines.append("Top flight deals in your window:")
         lines.append("")
 
-                for p in top_pairs_sorted:
+    for p in top_pairs_sorted:
             dep_dt = datetime.fromisoformat(p["departureDate"])
             ret_dt = datetime.fromisoformat(p["returnDate"])
             dep_label = dep_dt.strftime("%d %b")
