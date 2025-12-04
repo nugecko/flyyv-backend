@@ -906,47 +906,6 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION: ASYNC JOB RUNNER
 # =======================================
 
-def process_date_pair_offers(
-    params: SearchParams,
-    dep: date,
-    ret: date,
-    max_offers_pair: int,
-) -> List[FlightOption]:
-    slices = [
-        {
-            "origin": params.origin,
-            "destination": params.destination,
-            "departure_date": dep.isoformat(),
-        },
-        {
-            "origin": params.destination,
-            "destination": params.origin,
-            "departure_date": ret.isoformat(),
-        },
-    ]
-    pax = [{"type": "adult"} for _ in range(params.passengers)]
-
-    try:
-        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
-        offer_request_id = offer_request.get("id")
-        if not offer_request_id:
-            print(f"[PAIR {dep} -> {ret}] No offer_request id")
-            return []
-
-        offers_json = duffel_list_offers(offer_request_id, limit=max_offers_pair)
-    except HTTPException as e:
-        print(f"[PAIR {dep} -> {ret}] Duffel HTTPException: {e.detail}")
-        return []
-    except Exception as e:
-        print(f"[PAIR {dep} -> {ret}] Unexpected Duffel error: {e}")
-        return []
-
-    batch_mapped: List[FlightOption] = [
-        map_duffel_offer_to_option(offer, dep, ret) for offer in offers_json
-    ]
-    return batch_mapped
-
-
 def run_search_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
@@ -986,6 +945,9 @@ def run_search_job(job_id: str):
         parallel_workers = get_config_int("PARALLEL_WORKERS", PARALLEL_WORKERS)
         parallel_workers = max(1, min(parallel_workers, 16))
 
+        # Safety timeout for each batch of Duffel calls, in seconds
+        batch_timeout_seconds = 120
+
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
             for batch_start in range(0, total_pairs, parallel_workers):
                 if total_count >= max_offers_total:
@@ -1004,44 +966,58 @@ def run_search_job(job_id: str):
                     for dep, ret in batch_pairs
                 }
 
-                for future in as_completed(futures):
-                    dep, ret = futures[future]
+                try:
+                    for future in as_completed(futures, timeout=batch_timeout_seconds):
+                        dep, ret = futures[future]
 
-                    job.processed_pairs += 1
+                        job.processed_pairs += 1
+                        job.updated_at = datetime.utcnow()
+                        JOBS[job_id] = job
+
+                        print(
+                            f"[JOB {job_id}] processed pair {job.processed_pairs}/{total_pairs}: "
+                            f"{dep} -> {ret}, current_results={total_count}"
+                        )
+
+                        try:
+                            batch_mapped = future.result()
+                        except Exception as e:
+                            print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
+                            continue
+
+                        if not batch_mapped:
+                            continue
+
+                        existing = JOB_RESULTS.get(job_id, [])
+                        combined = existing + batch_mapped
+
+                        filtered = apply_filters(combined, job.params)
+                        balanced = balance_airlines(filtered, max_total=max_offers_total)
+
+                        if len(balanced) > max_offers_total:
+                            balanced = balanced[:max_offers_total]
+
+                        JOB_RESULTS[job_id] = balanced
+                        total_count = len(balanced)
+
+                        print(f"[JOB {job_id}] partial results updated, count={total_count}")
+
+                        if total_count >= max_offers_total:
+                            print(f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping")
+                            break
+
+                except Exception as e:
+                    # This usually means the batch timed out waiting for Duffel
+                    error_msg = (
+                        f"Timed out or failed waiting for batch Duffel responses "
+                        f"after {batch_timeout_seconds} seconds: {e}"
+                    )
+                    print(f"[JOB {job_id}] {error_msg}")
+                    job.status = JobStatus.FAILED
+                    job.error = error_msg
                     job.updated_at = datetime.utcnow()
                     JOBS[job_id] = job
-
-                    print(
-                        f"[JOB {job_id}] processed pair {job.processed_pairs}/{total_pairs}: "
-                        f"{dep} -> {ret}, current_results={total_count}"
-                    )
-
-                    try:
-                        batch_mapped = future.result()
-                    except Exception as e:
-                        print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
-                        continue
-
-                    if not batch_mapped:
-                        continue
-
-                    existing = JOB_RESULTS.get(job_id, [])
-                    combined = existing + batch_mapped
-
-                    filtered = apply_filters(combined, job.params)
-                    balanced = balance_airlines(filtered, max_total=max_offers_total)
-
-                    if len(balanced) > max_offers_total:
-                        balanced = balanced[:max_offers_total]
-
-                    JOB_RESULTS[job_id] = balanced
-                    total_count = len(balanced)
-
-                    print(f"[JOB {job_id}] partial results updated, count={total_count}")
-
-                    if total_count >= max_offers_total:
-                        print(f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping")
-                        break
+                    return
 
                 if total_count >= max_offers_total:
                     break
