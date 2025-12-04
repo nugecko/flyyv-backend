@@ -1265,8 +1265,10 @@ def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: Sea
         f"from £{int(cheapest.price)}"
     )
 
-    dep_label = cheapest.departureDate
-    ret_label = cheapest.returnDate
+    dep_dt = datetime.fromisoformat(cheapest.departureDate)
+    ret_dt = datetime.fromisoformat(cheapest.returnDate)
+    dep_label = dep_dt.strftime("%d-%m-%Y")
+    ret_label = ret_dt.strftime("%d-%m-%Y")
 
     lines: List[str] = []
 
