@@ -2537,7 +2537,7 @@ def get_alerts(
         if not include_inactive:
             query = query.filter(Alert.is_active == True)  # noqa: E712
 
-                alerts = query.order_by(Alert.created_at.desc()).all()
+        alerts = query.order_by(Alert.created_at.desc()).all()
 
         return [
             AlertOut(
