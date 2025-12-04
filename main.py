@@ -1450,7 +1450,7 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
         lines.append("Top flight deals in your window:")
         lines.append("")
 
-        for p in top_pairs_sorted:
+                for p in top_pairs_sorted:
             dep_dt = datetime.fromisoformat(p["departureDate"])
             ret_dt = datetime.fromisoformat(p["returnDate"])
             dep_label = dep_dt.strftime("%d %b")
@@ -1459,6 +1459,7 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
 
             price_label = int(p["cheapestPrice"])
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
+            link = p.get("flyyvLink")
 
             line = (
                 f"£{price_label}, {dep_label} \u2192 {ret_label}, "
@@ -1467,6 +1468,10 @@ def send_smart_alert_email(alert: Alert, options: List[FlightOption], params: Se
 
             if threshold is not None and float(price_label) <= float(threshold):
                 line += "  (within your limit)"
+
+            # If we have a deep link for this pair, show it on the next line
+            if link:
+                line += f"\n  View on Flyyv: {link}"
 
             lines.append(line)
 
