@@ -77,6 +77,8 @@ class Alert(Base):
     destination = Column(String, nullable=False)
     cabin = Column(String, nullable=False)
 
+    search_mode = Column(String(20), nullable=True, default="flexible")
+
     departure_start = Column(Date, nullable=False)
     departure_end = Column(Date, nullable=False)
     return_start = Column(Date, nullable=True)
