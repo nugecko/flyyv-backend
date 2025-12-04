@@ -2450,6 +2450,7 @@ def create_alert(payload: AlertCreate):
             origin=payload.origin,
             destination=payload.destination,
             cabin=payload.cabin,
+            search_mode=payload.search_mode or "flexible",
             departure_start=payload.departure_start,
             departure_end=payload.departure_end,
             return_start=payload.return_start,
