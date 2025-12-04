@@ -1,7 +1,5 @@
 import os
-import smtplib
 from datetime import datetime
-from email.message import EmailMessage
 from typing import List, Dict, Tuple, Any
 
 from fastapi import HTTPException
