@@ -2539,13 +2539,14 @@ def get_alerts(
 
         alerts = query.order_by(Alert.created_at.desc()).all()
 
-        return [
+                return [
             AlertOut(
                 id=a.id,
                 email=a.user_email,
                 origin=a.origin,
                 destination=a.destination,
                 cabin=a.cabin,
+                search_mode=a.search_mode,
                 departure_start=a.departure_start,
                 departure_end=a.departure_end,
                 return_start=a.return_start,
@@ -2563,7 +2564,6 @@ def get_alerts(
         ]
     finally:
         db.close()
-
 
 @app.patch("/alerts/{alert_id}")
 def update_alert(
