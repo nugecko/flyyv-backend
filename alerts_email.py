@@ -225,13 +225,16 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         if p.get("totalFlights", 0) > 0 and p.get("cheapestPrice") is not None
     ]
 
-    if not top_pairs:
+        if not top_pairs:
         lines.append("No flights were found in this window in the latest scan.")
     else:
         MAX_RESULTS = 10
-        top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:MAX_RESULTS]
+        top_pairs_sorted = sorted(
+            top_pairs,
+            key=lambda x: x["cheapestPrice"],
+        )[:MAX_RESULTS]
 
-        lines.append("Top flight deals in your FlyyvFlex window:")
+        lines.append("Top flight deals in your window:")
         lines.append("")
 
         for p in top_pairs_sorted:
@@ -243,7 +246,10 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             price_label = int(p["cheapestPrice"])
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
 
-            line = f"£{price_label}, {dep_label} → {ret_label}, {airline_label}"
+            line = (
+                f"£{price_label}, {dep_label} \u2192 {ret_label}, "
+                f"{airline_label}"
+            )
 
             if threshold is not None and float(price_label) <= float(threshold):
                 line += "  (within your limit)"
