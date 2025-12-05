@@ -726,16 +726,24 @@ def balance_airlines(
     options: List[FlightOption],
     max_total: Optional[int] = None,
 ) -> List[FlightOption]:
+    """
+    Balance offers across airlines:
+    1) Ensure each airline that appears gets at least one slot where possible
+    2) Then fill remaining slots by overall best price, respecting a per airline cap
+    """
     if not options:
         return []
 
+    # Always start from cheapest to most expensive
     sorted_by_price = sorted(options, key=lambda x: x.price)
 
+    # Resolve total cap
     if max_total is None or max_total <= 0:
         max_total = len(sorted_by_price)
 
     actual_total = min(max_total, len(sorted_by_price))
 
+    # Read max share setting from admin_config, default to 40 percent
     max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 40)
     if max_share_percent <= 0 or max_share_percent > 100:
         max_share_percent = 40
@@ -743,15 +751,43 @@ def balance_airlines(
     airline_counts: Dict[str, int] = defaultdict(int)
     result: List[FlightOption] = []
 
-    unique_airlines = {o.airlineCode or o.airline for o in sorted_by_price}
+    # Group options by airline so we can easily pick the cheapest per airline
+    airline_buckets: Dict[str, List[FlightOption]] = defaultdict(list)
+    for opt in sorted_by_price:
+        key = opt.airlineCode or opt.airline
+        airline_buckets[key].append(opt)
+
+    unique_airlines = list(airline_buckets.keys())
     num_airlines = max(1, len(unique_airlines))
 
+    # Compute a per airline cap based on max share and number of airlines
     base_cap = max(1, (max_share_percent * actual_total) // 100)
-    per_airline_cap = max(base_cap, actual_total // num_airlines if num_airlines else base_cap)
+    per_airline_cap = max(
+        base_cap,
+        actual_total // num_airlines if num_airlines else base_cap,
+    )
 
+    # First pass, guarantee each airline at least one slot where possible
+    seen_ids = set()
+    for airline_key, bucket in airline_buckets.items():
+        if len(result) >= actual_total:
+            break
+
+        cheapest_opt = bucket[0]  # bucket is already sorted by price because base list was sorted
+        if cheapest_opt is None:
+            continue
+
+        airline_counts[airline_key] += 1
+        result.append(cheapest_opt)
+        seen_ids.add(id(cheapest_opt))
+
+    # Second pass, fill remaining slots by overall best price, respecting per airline cap
     for opt in sorted_by_price:
         if len(result) >= actual_total:
             break
+
+        if id(opt) in seen_ids:
+            continue
 
         key = opt.airlineCode or opt.airline
         if airline_counts[key] >= per_airline_cap:
@@ -759,7 +795,9 @@ def balance_airlines(
 
         airline_counts[key] += 1
         result.append(opt)
+        seen_ids.add(id(opt))
 
+    # Final sort by price for consistent ordering
     result.sort(key=lambda x: x.price)
     return result
 
