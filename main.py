@@ -809,7 +809,7 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
         f"max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}"
     )
 
-    date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
+date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
 print(f"[search] generated {len(date_pairs)} date pairs")
 
 max_date_pairs = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
