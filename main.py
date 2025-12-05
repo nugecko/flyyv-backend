@@ -1078,7 +1078,7 @@ def run_search_job(job_id: str):
                             print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
                             continue
 
-                                                if not batch_mapped:
+                        if not batch_mapped:
                             continue
 
                         existing = JOB_RESULTS.get(job_id, [])
