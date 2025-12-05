@@ -835,6 +835,7 @@ def estimate_date_pairs(params: SearchParams) -> int:
     pairs = generate_date_pairs(params, max_pairs=max_pairs)
     return len(pairs)
 
+
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(
         f"[search] run_duffel_scan START origin={params.origin} "
@@ -933,24 +934,6 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(
         f"[search] collected total {len(collected_offers)} offers across all pairs"
     )
-
-        mapped: List[FlightOption] = [
-        map_duffel_offer_to_option(offer, dep, ret)
-        for offer, dep, ret in collected_offers
-    ]
-    print(f"[search] mapped {len(mapped)} offers to FlightOption")
-
-    filtered = apply_filters(mapped, params)
-    print(f"[search] filtered down to {len(filtered)} offers")
-
-    # Debug airline distribution before balancing
-    airline_counts = Counter(opt.airlineCode or opt.airline for opt in filtered)
-    print(f"[search] airline mix before balance: {dict(airline_counts)}")
-
-    balanced = balance_airlines(filtered, max_total=max_offers_total)
-    print(f"[search] balance_airlines returned {len(balanced)} offers")
-    print("[search] run_duffel_scan DONE")
-    return balanced
 
     # Now work per date pair instead of globally
     print("[search] starting per date pair mapping, filtering and balancing")
