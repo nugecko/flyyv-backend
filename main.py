@@ -810,11 +810,15 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     )
 
     date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
-    print(f"[search] generated {len(date_pairs)} date pairs")
+print(f"[search] generated {len(date_pairs)} date pairs")
 
-    if not date_pairs:
-        print("[search] no date pairs generated, returning empty list")
-        return []
+max_date_pairs = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
+if max_date_pairs and len(date_pairs) > max_date_pairs:
+    date_pairs = date_pairs[:max_date_pairs]
+
+if not date_pairs:
+    print("[search] no date pairs generated, returning empty list")
+    return []
 
     collected_offers: List[Tuple[dict, date, date]] = []
     total_count = 0
