@@ -2443,13 +2443,20 @@ def create_alert(payload: AlertCreate):
         alert_id = str(uuid4())
         now = datetime.utcnow()
 
-        # Decide mode from payload, default to "single"
-        mode_value = payload.mode or "single"
-        if mode_value not in ("single", "smart"):
+                # Decide search_mode and derive mode
+        search_mode_value = payload.search_mode or "flexible"
+
+        if search_mode_value not in ("flexible", "fixed"):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid alert mode, expected 'single' or 'smart'",
+                detail="Invalid search_mode, expected 'flexible' or 'fixed'",
             )
+
+        # Derive mode from search_mode
+        if search_mode_value == "flexible":
+            mode_value = "smart"
+        else:
+            mode_value = "single"
 
         alert = Alert(
             id=alert_id,
@@ -2457,7 +2464,7 @@ def create_alert(payload: AlertCreate):
             origin=payload.origin,
             destination=payload.destination,
             cabin=payload.cabin,
-            search_mode=payload.search_mode or "flexible",
+            search_mode=search_mode_value,
             departure_start=payload.departure_start,
             departure_end=payload.departure_end,
             return_start=payload.return_start,
