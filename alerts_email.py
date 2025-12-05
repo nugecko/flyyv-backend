@@ -29,7 +29,7 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "https://flyyv.com")
 def send_alert_email_for_alert(alert, cheapest, params) -> None:
     """
     One off alert email:
-    single date pair, using the same behaviour as before.
+    single date pair, simple format.
     """
     if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
         raise HTTPException(
@@ -63,10 +63,8 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
         f"with {cheapest.airline} ({cheapest.airlineCode or ''})"
     )
     lines.append("")
-    lines.append(
-        "To view this alert and explore more dates, go to your Flyyv dashboard:"
-    )
-    lines.append("https://flyyv.com")
+    lines.append("To view this alert and explore more dates, go to your Flyyv dashboard:")
+    lines.append(FRONTEND_BASE_URL)
     lines.append("")
     lines.append("You are receiving this because you created a Flyyv price alert.")
     lines.append("To stop these alerts, delete the alert in your Flyyv profile.")
@@ -75,7 +73,8 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = ALERT_FROM_EMAIL
+    # From header with display name
+    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
     msg.set_content(body)
 
@@ -176,15 +175,17 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     start_label = params.earliestDeparture.strftime("%d %B %Y")
     end_label = params.latestDeparture.strftime("%d %B %Y")
 
-    # Nights label, based on stay range in params
+    # Nights label, based on actual trip length of the cheapest overall option
     nights_text = None
-    min_nights = getattr(params, "minStayDays", None)
-    max_nights = getattr(params, "maxStayDays", None)
-    if isinstance(min_nights, int) and isinstance(max_nights, int):
-        if min_nights == max_nights:
-            nights_text = f"{min_nights}"
-        else:
-            nights_text = f"{min_nights} to {max_nights}"
+    if options:
+        first_opt = min(options, key=lambda o: o.price)
+        try:
+            dep_dt_first = datetime.fromisoformat(first_opt.departureDate)
+            ret_dt_first = datetime.fromisoformat(first_opt.returnDate)
+            nights_val = max(1, (ret_dt_first - dep_dt_first).days)
+            nights_text = f"{nights_val}"
+        except Exception:
+            nights_text = None
 
     combinations_checked = len(pairs_summary)
 
@@ -279,7 +280,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 
     lines.append("")
     lines.append("View and manage your alerts:")
-    lines.append("https://flyyv.com")
+    lines.append(FRONTEND_BASE_URL)
     lines.append("")
     lines.append(
         "You are receiving this email because you created a FlyyvFlex Monitor alert."
@@ -290,7 +291,8 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = ALERT_FROM_EMAIL
+    # From header with display name
+    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
     msg.set_content(body)
 
