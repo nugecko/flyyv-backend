@@ -1091,8 +1091,6 @@ def run_search_job(job_id: str):
             f"max_offers_pair={max_offers_pair}, max_offers_total={max_offers_total}"
         )
 
-        total_count = 0
-
         if total_pairs == 0:
             job.status = JobStatus.COMPLETED
             job.updated_at = datetime.utcnow()
@@ -1100,6 +1098,7 @@ def run_search_job(job_id: str):
             print(f"[JOB {job_id}] No date pairs, completed with 0 options")
             return
 
+        total_count = 0
         parallel_workers = get_config_int("PARALLEL_WORKERS", PARALLEL_WORKERS)
         parallel_workers = max(1, min(parallel_workers, 16))
 
@@ -1144,37 +1143,76 @@ def run_search_job(job_id: str):
                             continue
 
                         if not batch_mapped:
+                            print(f"[JOB {job_id}] pair {dep} -> {ret}: no offers returned from Duffel")
                             continue
 
-                        existing = JOB_RESULTS.get(job_id, [])
-                        combined = existing + batch_mapped
+                        # Per date pair filtering
+                        filtered_pair = apply_filters(batch_mapped, job.params)
+                        print(
+                            f"[JOB {job_id}] pair {dep} -> {ret}: "
+                            f"filtered down to {len(filtered_pair)} offers"
+                        )
 
-                        # Apply filters to all collected offers so far
-                        filtered = apply_filters(combined, job.params)
+                        if not filtered_pair:
+                            print(f"[JOB {job_id}] pair {dep} -> {ret}: no offers after filters")
+                            continue
 
-                        # Debug: airline distribution before balancing
-                        airline_counts = Counter(
-                            opt.airlineCode or opt.airline for opt in filtered
+                        # Debug airline distribution before per pair balancing
+                        airline_counts_pair = Counter(
+                            opt.airlineCode or opt.airline for opt in filtered_pair
                         )
                         print(
-                            f"[JOB {job_id}] airline mix before balance: "
-                            f"{dict(airline_counts)}"
+                            f"[JOB {job_id}] pair {dep} -> {ret}: "
+                            f"airline mix before balance: {dict(airline_counts_pair)}"
                         )
 
-                        # Balance across airlines and enforce max_total cap
-                        balanced = balance_airlines(filtered, max_total=max_offers_total)
+                        # Enforce per pair cap, list already sorted by price in apply_filters
+                        if len(filtered_pair) > max_offers_pair:
+                            print(
+                                f"[JOB {job_id}] pair {dep} -> {ret}: capping offers from "
+                                f"{len(filtered_pair)} to {max_offers_pair} using max_offers_pair"
+                            )
+                            filtered_pair = filtered_pair[:max_offers_pair]
 
-                        if len(balanced) > max_offers_total:
-                            balanced = balanced[:max_offers_total]
+                        # Balance airlines inside this specific date pair
+                        balanced_pair = balance_airlines(filtered_pair, max_total=max_offers_pair)
+                        print(
+                            f"[JOB {job_id}] pair {dep} -> {ret}: "
+                            f"balance_airlines returned {len(balanced_pair)} offers"
+                        )
 
-                        JOB_RESULTS[job_id] = balanced
-                        total_count = len(balanced)
+                        if not balanced_pair:
+                            continue
+
+                        # Respect global max_offers_total when aggregating results
+                        current_results = JOB_RESULTS.get(job_id, [])
+                        remaining_slots = max_offers_total - len(current_results)
+
+                        if remaining_slots <= 0:
+                            print(
+                                f"[JOB {job_id}] global max_offers_total={max_offers_total} "
+                                f"reached, skipping further additions"
+                            )
+                            total_count = len(current_results)
+                            break
+
+                        if len(balanced_pair) > remaining_slots:
+                            print(
+                                f"[JOB {job_id}] pair {dep} -> {ret}: "
+                                f"trimming balanced offers from {len(balanced_pair)} "
+                                f"to remaining_slots={remaining_slots} due to global cap"
+                            )
+                            balanced_pair = balanced_pair[:remaining_slots]
+
+                        JOB_RESULTS[job_id] = current_results + balanced_pair
+                        total_count = len(JOB_RESULTS[job_id])
 
                         print(f"[JOB {job_id}] partial results updated, count={total_count}")
 
-
                         if total_count >= max_offers_total:
-                            print(f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping")
+                            print(
+                                f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping"
+                            )
                             break
 
                 except Exception as e:
