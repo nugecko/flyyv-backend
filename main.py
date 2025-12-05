@@ -796,7 +796,6 @@ def estimate_date_pairs(params: SearchParams) -> int:
     pairs = generate_date_pairs(params, max_pairs=max_pairs)
     return len(pairs)
 
-
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(
         f"[search] run_duffel_scan START origin={params.origin} "
@@ -809,16 +808,21 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
         f"max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}"
     )
 
-date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
-print(f"[search] generated {len(date_pairs)} date pairs")
+    date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
+    print(f"[search] generated {len(date_pairs)} date pairs")
 
-max_date_pairs = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
-if max_date_pairs and len(date_pairs) > max_date_pairs:
-    date_pairs = date_pairs[:max_date_pairs]
+    # Apply extra safety cap from admin_config
+    max_date_pairs = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
+    if max_date_pairs and len(date_pairs) > max_date_pairs:
+        print(
+            f"[search] capping date_pairs from {len(date_pairs)} to "
+            f"{max_date_pairs} using MAX_DATE_PAIRS_PER_ALERT"
+        )
+        date_pairs = date_pairs[:max_date_pairs]
 
-if not date_pairs:
-    print("[search] no date pairs generated, returning empty list")
-    return []
+    if not date_pairs:
+        print("[search] no date pairs generated, returning empty list")
+        return []
 
     collected_offers: List[Tuple[dict, date, date]] = []
     total_count = 0
