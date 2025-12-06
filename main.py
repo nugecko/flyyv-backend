@@ -2766,11 +2766,12 @@ def delete_alert(
         if resolved_email and alert.user_email != resolved_email:
             raise HTTPException(status_code=403, detail="Alert does not belong to this user")
 
-        alert.is_active = False
-        alert.updated_at = datetime.utcnow()
+        # Hard delete: remove the alert from the database entirely
+        db.delete(alert)
         db.commit()
 
         return {"status": "ok", "id": alert_id}
+
     finally:
         db.close()
 
