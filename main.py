@@ -358,11 +358,9 @@ class AlertOut(AlertBase):
 
 app = FastAPI()
 
-
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -380,7 +378,6 @@ from early_access import router as early_access_router
 app.include_router(early_access_router)
 
 # ===== END SECTION: FastAPI APP AND CORS =====
-
 
 # =======================================
 # SECTION: ENV, DUFFEL AND EMAIL CONFIG
