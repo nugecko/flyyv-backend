@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from db import SessionLocal
 from models import EarlyAccessSubscriber
+from alerts_email import send_early_access_welcome_email
 
 router = APIRouter()
 
