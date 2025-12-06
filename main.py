@@ -372,6 +372,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =======================================
+# SECTION: ROUTER INCLUDES
+# =======================================
+
+from early_access import router as early_access_router
+app.include_router(early_access_router)
+
 # ===== END SECTION: FastAPI APP AND CORS =====
 
 
