@@ -6,12 +6,50 @@ from db import SessionLocal
 from models import EarlyAccessSubscriber
 from alerts_email import send_early_access_welcome_email
 
+import os
+import smtplib
+from email.mime.text import MIMEText
+
 router = APIRouter()
 
 
 class EarlyAccessInput(BaseModel):
     email: EmailStr
 
+def send_early_access_welcome_email(to_email: str) -> None:
+    host = os.getenv("EMAIL_HOST", "mail-eu.smtp2go.com")
+    port = int(os.getenv("EMAIL_PORT", "587"))
+    user = os.getenv("EMAIL_USER")
+    password = os.getenv("EMAIL_PASSWORD")
+    from_email = os.getenv("EMAIL_FROM", user) or user
+
+    if not user or not password:
+        print("[early_access] EMAIL_USER or EMAIL_PASSWORD not set, skipping welcome email")
+        return
+
+    subject = "Welcome to Flyyv early access"
+    body = (
+        "Hi,\n\n"
+        "Thank you for joining the Flyyv early access list.\n"
+        "You will be among the first to try our smart premium flight alerts.\n\n"
+        "Talk soon,\n"
+        "The Flyyv team"
+    )
+
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+
+    try:
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            server.login(user, password)
+            server.send_message(msg)
+        print(f"[early_access] Welcome email sent to {to_email}")
+    except Exception as e:
+        # Do not break signup if email fails
+        print(f"[early_access] Failed to send welcome email to {to_email}: {e}")
 
 @router.post("/early-access")
 def early_access_signup(payload: EarlyAccessInput):
@@ -25,6 +63,7 @@ def early_access_signup(payload: EarlyAccessInput):
             .first()
         )
         if existing:
+            # Optional: still send email if you want to remind them
             return {"message": "Already subscribed"}
 
         # Create new subscriber
@@ -32,12 +71,13 @@ def early_access_signup(payload: EarlyAccessInput):
         db.add(subscriber)
         db.commit()
 
-        # We will add the email sending logic here in the next step
-        # for example: send_early_access_welcome_email(payload.email)
+        # Send welcome email, do not block on failure
+        send_early_access_welcome_email(payload.email)
 
         return {"message": "Success"}
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         db.close()
+
