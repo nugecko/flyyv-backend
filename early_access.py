@@ -66,7 +66,6 @@ def early_access_signup(payload: EarlyAccessInput):
         )
         if existing:
             logger.info(f"[early_access] {payload.email} already subscribed")
-            # Optional: still send email if you want to remind them
             return {"message": "Already subscribed"}
 
         # Create new subscriber
