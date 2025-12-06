@@ -3,6 +3,8 @@
 # =======================================
 
 from datetime import datetime
+from uuid import uuid4
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -14,6 +16,8 @@ from sqlalchemy import (
     ForeignKey,
     Text,
 )
+from sqlalchemy.dialects.postgresql import UUID
+
 from db import Base
 
 
@@ -61,6 +65,18 @@ class AppUser(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+# =======================================
+# SECTION: EARLY ACCESS SUBSCRIBERS
+# =======================================
+
+class EarlyAccessSubscriber(Base):
+    __tablename__ = "early_access_subscribers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    email = Column(String(255), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_notified = Column(Boolean, default=False, nullable=False)
 
 
 # =======================================
