@@ -839,6 +839,45 @@ def estimate_date_pairs(params: SearchParams) -> int:
     pairs = generate_date_pairs(params, max_pairs=max_pairs)
     return len(pairs)
 
+def apply_global_airline_cap(
+    options: List[FlightOption],
+    max_share: float = 0.5,
+) -> List[FlightOption]:
+    """
+    Apply a global cap per airline across the final list.
+
+    Example:
+    max_share = 0.5 means no airline is allowed to have more than
+    fifty percent of all returned options.
+
+    Assumes options are already sorted by "best first"
+    (for example price or your existing score).
+    """
+    if not options:
+        print("[search] apply_global_airline_cap: no options, skipping")
+        return options
+
+    total = len(options)
+    max_per_airline = max(1, int(total * max_share))
+
+    counts: Counter = Counter()
+    capped: List[FlightOption] = []
+
+    for opt in options:
+        airline = opt.airlineCode or opt.airline or "UNKNOWN"
+        if counts[airline] >= max_per_airline:
+            # Skip this option because this airline is already at the cap
+            continue
+
+        capped.append(opt)
+        counts[airline] += 1
+
+    print(
+        f"[search] apply_global_airline_cap: input={total}, "
+        f"output={len(capped)}, max_per_airline={max_per_airline}, "
+        f"airline_counts={dict(counts)}"
+    )
+    return capped
 
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(
