@@ -1356,6 +1356,9 @@ def run_search_job(job_id: str):
                         if not balanced_pair:
                             continue
 
+                        # Apply an extra per pair global cap to avoid one airline dominating this batch
+                        balanced_pair = apply_global_airline_cap(balanced_pair, max_share=0.3)
+
                         # Respect global max_offers_total when aggregating results
                         current_results = JOB_RESULTS.get(job_id, [])
                         remaining_slots = max_offers_total - len(current_results)
