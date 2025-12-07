@@ -723,7 +723,8 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
         else:
             filtered = [o for o in filtered if o.stops in allowed]
 
-    filtered.sort(key=lambda x: x.price)
+    # Sort by number of stops first (direct flights first), then by price
+    filtered.sort(key=lambda o: (o.stops, o.price))
     return filtered
 
 
