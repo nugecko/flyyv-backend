@@ -1950,6 +1950,10 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
     if estimated_pairs <= 1:
         options = run_duffel_scan(params)
+
+        # Apply a global cap so no single airline dominates the results
+        options = apply_global_airline_cap(options, max_share=0.5)
+
         return {
             "status": "ok",
             "mode": "sync",
