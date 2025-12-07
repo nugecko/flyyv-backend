@@ -2,7 +2,7 @@
   "cron": [
     {
       "command": "python run_alerts_cycle.py",
-      "schedule": "*/10 * * * *"
+      "schedule": "*/60 * * * *"
     }
   ]
 }
