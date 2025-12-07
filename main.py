@@ -878,6 +878,84 @@ def apply_global_airline_cap(
         f"airline_counts={dict(counts)}"
     )
     return capped
+def fetch_direct_only_offers(
+    origin: str,
+    destination: str,
+    dep_date: date,
+    ret_date: date,
+    passengers: int,
+    cabin: str,
+    per_pair_limit: int = 15,
+) -> List[FlightOption]:
+    """
+    Make a tiny direct only Duffel call with max_connections=0
+    and return mapped FlightOption objects.
+    """
+    if not DUFFEL_ACCESS_TOKEN:
+        print("[direct_only] Duffel not configured")
+        return []
+
+    # Build slices exactly like run_duffel_scan does
+    slices = [
+        {
+            "origin": origin,
+            "destination": destination,
+            "departure_date": dep_date.isoformat(),
+        },
+        {
+            "origin": destination,
+            "destination": origin,
+            "departure_date": ret_date.isoformat(),
+        },
+    ]
+
+    pax = [{"type": "adult"} for _ in range(passengers)]
+
+    # Create the request but with max_connections=0
+    url = f"{DUFFEL_API_BASE}/air/offer_requests"
+    payload = {
+        "data": {
+            "slices": slices,
+            "passengers": pax,
+            "cabin_class": cabin.lower(),
+            "max_connections": 0,
+        }
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=duffel_headers(), timeout=20)
+    except Exception as e:
+        print(f"[direct_only] error creating request: {e}")
+        return []
+
+    if resp.status_code >= 400:
+        print("[direct_only] offer_request error:", resp.status_code, resp.text)
+        return []
+
+    body = resp.json()
+    offer_request_id = body.get("data", {}).get("id")
+    if not offer_request_id:
+        print("[direct_only] no offer_request_id returned")
+        return []
+
+    # Now fetch offers sorted by price
+    try:
+        offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+    except Exception as e:
+        print(f"[direct_only] error listing offers: {e}")
+        return []
+
+    results: List[FlightOption] = []
+    for offer in offers_json:
+        try:
+            opt = map_duffel_offer_to_option(offer, dep_date, ret_date)
+            results.append(opt)
+        except Exception as e:
+            print(f"[direct_only] mapping error: {e}")
+
+    print(f"[direct_only] fetched {len(results)} direct offers")
+
+    return results
 
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(
