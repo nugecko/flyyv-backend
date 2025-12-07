@@ -1375,11 +1375,17 @@ def run_search_job(job_id: str):
                                 f"to remaining_slots={remaining_slots} due to global cap"
                             )
                             balanced_pair = balanced_pair[:remaining_slots]
+                        
+                         # Merge pair into the existing results
+                         merged = current_results + balanced_pair
 
-                        JOB_RESULTS[job_id] = current_results + balanced_pair
-                        total_count = len(JOB_RESULTS[job_id])
+                         # Apply global airline cap incrementally
+                         merged = apply_global_airline_cap(merged, max_share=0.5)
+                       
+                        JOB_RESULTS[job_id] = merged
+                        total_count = len(merged)
 
-                        print(f"[JOB {job_id}] partial results updated, count={total_count}")
+                        print(f"[JOB {job_id}] partial results updated after cap, count={total_count}")
 
                         if total_count >= max_offers_total:
                             print(
