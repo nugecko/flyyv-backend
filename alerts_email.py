@@ -400,7 +400,7 @@ def send_alert_confirmation_email(alert) -> None:
         f"&autoSearch=1"
     )
 
-        alert_id = getattr(alert, "id", None)
+    alert_id = getattr(alert, "id", None)
 
     if return_start:
         results_url += f"&returnStart={return_start.isoformat()}"
