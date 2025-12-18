@@ -120,7 +120,7 @@ def build_alert_search_link(alert) -> str:
     # remove None values
     params = {k: v for k, v in params.items() if v is not None}
 
-    return f"{base}/?{urlencode(params)}"
+        return f"{base}/SearchFlyyv?{urlencode(params)}"
     
 # ===== END HELPER LINK BUILDERS =====
 
