@@ -338,7 +338,7 @@ def send_alert_confirmation_email(alert) -> None:
     msg["Subject"] = subject
     msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
-        msg.set_content(body)
+    msg.set_content(body)
 
     # Light HTML version for nicer rendering
     html = f"""
