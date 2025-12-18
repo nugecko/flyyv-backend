@@ -427,7 +427,7 @@ def send_alert_confirmation_email(alert) -> None:
               </div>
 
               <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
-                <strong>Trip length:</strong> {nights_text or "Flexible"}
+                <strong>Trip length:</strong> {nights_text or ("Flexible" if is_flex else "Not set")}
               </div>
 
               <div style="font-size:15px;color:#111827;margin:0;">
