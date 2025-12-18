@@ -2053,7 +2053,23 @@ def list_routes():
 def test_email_alert():
     send_test_alert_email()
     return {"detail": "Test alert email sent"}
+    
+@app.get("/test-email-confirmation")
+def test_email_confirmation(email: str = ALERT_TO_EMAIL):
+    """
+    Sends a confirmation-style email using a temporary dummy alert object.
+    Use this to verify content and delivery without creating an alert record.
+    """
+    class DummyAlert:
+        user_email = email
+        origin = "LON"
+        destination = "TLV"
+        cabin = "BUSINESS"
+        departure_start = datetime.utcnow().date()
+        departure_end = (datetime.utcnow() + timedelta(days=30)).date()
 
+    send_alert_confirmation_email(DummyAlert())
+    return {"detail": f"Test confirmation email sent to {email}"}
 
 @app.get("/trigger-daily-alert")
 def trigger_daily_alert(background_tasks: BackgroundTasks):
