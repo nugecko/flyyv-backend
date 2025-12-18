@@ -400,7 +400,7 @@ def send_alert_confirmation_email(alert) -> None:
     msg.set_content(body)
 
     # Light HTML version for nicer rendering
-        html = f"""
+    html = f"""
     <html>
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:640px;margin:0 auto;padding:24px;">
