@@ -374,21 +374,18 @@ def send_alert_confirmation_email(alert) -> None:
     dep_end_label = departure_end.strftime("%d %b %Y") if departure_end else "Not set"
     dep_window_label = f"{dep_start_label} to {dep_end_label}"
 
-    # Trip length label (based on min and max nights if we have return windows)
+        # Trip length label
     trip_length_label = "Flexible"
-    if departure_start and return_start:
-        try:
-            min_nights = max(1, (return_start - departure_start).days)
-            max_nights = min_nights
-            if return_end:
-                max_nights = max(1, (return_end - departure_start).days)
-
-            if min_nights == max_nights:
-                trip_length_label = f"{min_nights} nights"
-            else:
-                trip_length_label = f"{min_nights} to {max_nights} nights"
-        except Exception:
-            trip_length_label = "Flexible"
+    try:
+        if departure_start and return_start:
+            nights = max(1, (return_start - departure_start).days)
+            trip_length_label = f"{nights} nights"
+        elif getattr(alert, "nights", None):
+            trip_length_label = f"{int(getattr(alert, 'nights'))} nights"
+        elif not is_flex:
+            trip_length_label = "Not set"
+    except Exception:
+        trip_length_label = "Flexible"
 
     # Build results link using the /SearchFlyyv prefix
     base = FRONTEND_BASE_URL.rstrip("/")
