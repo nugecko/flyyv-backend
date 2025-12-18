@@ -2681,26 +2681,32 @@ def create_alert(payload: AlertCreate):
         db.commit()
         db.refresh(alert)
 
+        # Send immediate confirmation email (non-blocking safety)
+        try:
+            send_alert_confirmation_email(alert)
+        except Exception:
+            pass
+
         return AlertOut(
-    id=alert.id,
-    email=alert.user_email,
-    origin=alert.origin,
-    destination=alert.destination,
-    cabin=alert.cabin,
-    search_mode=alert.search_mode,
-    departure_start=alert.departure_start,
-    departure_end=alert.departure_end,
-    return_start=alert.return_start,
-    return_end=alert.return_end,
-    alert_type=alert.alert_type,
-    max_price=alert.max_price,
-    mode=alert.mode,
-    times_sent=alert.times_sent,
-    is_active=alert.is_active,
-    last_price=alert.last_price,
-    created_at=alert.created_at,
-    updated_at=alert.updated_at,
-)
+            id=alert.id,
+            email=alert.user_email,
+            origin=alert.origin,
+            destination=alert.destination,
+            cabin=alert.cabin,
+            search_mode=alert.search_mode,
+            departure_start=alert.departure_start,
+            departure_end=alert.departure_end,
+            return_start=alert.return_start,
+            return_end=alert.return_end,
+            alert_type=alert.alert_type,
+            max_price=alert.max_price,
+            mode=alert.mode,
+            times_sent=alert.times_sent,
+            is_active=alert.is_active,
+            last_price=alert.last_price,
+            created_at=alert.created_at,
+            updated_at=alert.updated_at,
+        )
     finally:
         db.close()
 
