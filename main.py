@@ -2680,7 +2680,18 @@ def create_alert(payload: AlertCreate):
         if mode_value not in ("smart", "single"):
             # Backward compatible fallback
             mode_value = "smart" if search_mode_value == "flexible" else "single"
-
+                # FlyyvFlex rule:
+        # Fixed trip length + date window = smart alert
+        if (
+            payload.mode == "smart"
+            or (
+                search_mode_value == "fixed"
+                and payload.departure_start
+                and payload.departure_end
+                and payload.return_start
+            )
+        ):
+            mode_value = "smart"
 
         alert = Alert(
             id=alert_id,
