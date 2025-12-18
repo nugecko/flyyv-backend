@@ -400,44 +400,59 @@ def send_alert_confirmation_email(alert) -> None:
     msg.set_content(body)
 
     # Light HTML version for nicer rendering
-    html = f"""
+        html = f"""
     <html>
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:640px;margin:0 auto;padding:24px;">
-          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:12px;padding:24px;">
+          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:24px;">
+
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{alert_label}</div>
 
-            <div style="font-size:26px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
+            <div style="font-size:26px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 10px 0;">
               Your alert is active
             </div>
 
-            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 18px 0;">
-              We will keep watching <strong>{alert.origin} \u2192 {alert.destination}</strong> and email you when prices match your alert conditions.
+            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 16px 0;">
+              We are watching <strong>{alert.origin} \u2192 {alert.destination}</strong> and will email you when prices match your alert conditions.
             </div>
 
-            <div style="border:1px solid #e6e8ee;border-radius:12px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
-              <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Alert details</div>
+            <!-- Pills -->
+            <div style="margin:0 0 14px 0;">
+              <span style="display:inline-block;background:#eef2ff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
+                {alert.origin} \u2192 {alert.destination}
+              </span>
 
-              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
-                <strong>Route:</strong> {alert.origin} \u2192 {alert.destination}
-              </div>
+              <span style="display:inline-block;background:#ecfdf5;border:1px solid #e6e8ee;color:#065f46;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
+                {str(alert.cabin).upper()}
+              </span>
 
-              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
-                <strong>Cabin:</strong> {alert.cabin}
-              </div>
+              <span style="display:inline-block;background:#f3f4f6;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
+                {"Smart price watch" if is_flex else "Price alert"}
+              </span>
 
-              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
-                <strong>Trip length:</strong> {nights_text or ("Flexible" if is_flex else "Not set")}
-              </div>
+              <span style="display:inline-block;background:#ffffff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
+                {dep_start} to {dep_end}
+              </span>
 
-              <div style="font-size:15px;color:#111827;margin:0;">
-                <strong>Departure window:</strong> {dep_start} to {dep_end}
-              </div>
+              <span style="display:inline-block;background:#ffffff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
+                {nights_text or ("Flexible" if is_flex else "Not set")}
+              </span>
+            </div>
+
+            <!-- Card -->
+            <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
+              <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
+
+              <ul style="margin:0;padding-left:18px;color:#111827;font-size:14px;line-height:1.6;">
+                <li>Scan your selected window for standout prices</li>
+                <li>Notify you when we see meaningful drops or strong value</li>
+                <li>Let you jump straight back into your results anytime</li>
+              </ul>
             </div>
 
             <div style="margin:0 0 18px 0;">
               <a href="{results_link}"
-                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
+                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:12px;font-weight:700;font-size:15px;">
                 View results
               </a>
             </div>
