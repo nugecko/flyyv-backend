@@ -94,6 +94,7 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
     """
     Builds a deep link to Flyyv search results for a specific date pair.
     Uses the /SearchFlyyv route and autoSearch=1 so the page runs immediately.
+    Date-pair drilldowns must use searchMode=single.
     """
     base = FRONTEND_BASE_URL.rstrip("/")
 
@@ -101,7 +102,7 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
         "origin": params.origin,
         "destination": params.destination,
         "cabin": params.cabin,
-        "searchMode": "flexible" if (getattr(params, "search_mode", None) == "flexible") else "flexible",
+        "searchMode": "single",
         "departureStart": departure,
         "departureEnd": departure,
         "returnStart": return_date,
@@ -109,8 +110,12 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
         "autoSearch": "1",
     }
 
-    return f"{base}/SearchFlyyv?{urlencode(qp)}"
+    # Optional: include alertId if present, helps keep context and attribution
+    alert_id = getattr(params, "alertId", None) or getattr(params, "alert_id", None) or getattr(params, "id", None)
+    if alert_id is not None:
+        qp["alertId"] = str(alert_id)
 
+    return f"{base}/SearchFlyyv?{urlencode(qp)}"
 
 def build_alert_search_link(alert) -> str:
     base = FRONTEND_BASE_URL.rstrip("/")
