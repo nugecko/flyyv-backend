@@ -374,7 +374,7 @@ def send_alert_confirmation_email(alert) -> None:
     dep_end_label = departure_end.strftime("%d %b %Y") if departure_end else "Not set"
     dep_window_label = f"{dep_start_label} to {dep_end_label}"
 
-        # Trip length label
+    # Trip length label
     trip_length_label = "Flexible"
     try:
         if departure_start and return_start:
@@ -386,6 +386,16 @@ def send_alert_confirmation_email(alert) -> None:
             trip_length_label = "Not set"
     except Exception:
         trip_length_label = "Flexible"
+
+    # Combinations checked (inclusive days in departure window)
+    combinations_checked = None
+    try:
+        if is_flex and departure_start and departure_end:
+            combinations_checked = (departure_end - departure_start).days + 1
+            if combinations_checked < 1:
+                combinations_checked = None
+    except Exception:
+        combinations_checked = None
 
     # Build results link using the /SearchFlyyv prefix
     base = FRONTEND_BASE_URL.rstrip("/")
@@ -421,8 +431,10 @@ def send_alert_confirmation_email(alert) -> None:
         f"Route: {origin} \u2192 {destination}\n"
         f"Cabin: {cabin}\n"
         f"Departure window: {dep_window_label}\n"
-        f"Trip length: {trip_length_label}\n\n"
-        "View results:\n"
+        f"Trip length: {trip_length_label}\n"
+        + (f"Combinations checked: {combinations_checked}\n" if combinations_checked else "")
+        + (f"Alert ID: {alert_id}\n" if alert_id else "")
+        + "\nView results:\n"
         f"{results_url}\n"
     )
     msg.set_content(text_body)
@@ -444,22 +456,33 @@ def send_alert_confirmation_email(alert) -> None:
             </div>
 
             <div style="margin:0 0 18px 0;">
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {origin} \u2192 {destination}
               </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;margin-bottom:8px;">
                 {cabin}
               </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {pill_type_label}
               </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {dep_window_label}
               </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {trip_length_label}
               </span>
+              {f'''
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
+                {combinations_checked} combinations
+              </span>
+              ''' if combinations_checked else ''}
             </div>
+
+            {f'''
+            <div style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">
+              Alert ID: {alert_id}
+            </div>
+            ''' if alert_id else ''}
 
             <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
               <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
@@ -478,7 +501,7 @@ def send_alert_confirmation_email(alert) -> None:
             </div>
 
             <div style="font-size:12px;color:#6b7280;line-height:1.4;">
-              You are receiving this email because you created a Flyyv alert.
+              You are receiving this email because you created a {email_type_label}.
             </div>
           </div>
 
