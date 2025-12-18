@@ -340,110 +340,119 @@ def send_alert_confirmation_email(alert) -> None:
     if not to_email:
         return
 
-    dep_start = alert.departure_start.strftime("%d %b %Y")
-    dep_end = alert.departure_end.strftime("%d %b %Y")
+    origin = getattr(alert, "origin", "")
+    destination = getattr(alert, "destination", "")
+    cabin = getattr(alert, "cabin", "BUSINESS")
 
-    is_flex = (getattr(alert, "mode", None) == "smart") or (getattr(alert, "search_mode", None) == "flexible")
-    alert_label = "FlyyvFlex Smart Search Alert" if is_flex else "Flyyv Alert"
+    departure_start = getattr(alert, "departure_start", None)
+    departure_end = getattr(alert, "departure_end", None)
+    return_start = getattr(alert, "return_start", None)
+    return_end = getattr(alert, "return_end", None)
 
-    # Nights, if return dates exist
-    nights_text = None
-    try:
-        if getattr(alert, "return_start", None) and getattr(alert, "departure_start", None):
-            min_nights = max(1, (alert.return_start - alert.departure_start).days)
-        else:
-            min_nights = None
+    search_mode = (getattr(alert, "search_mode", None) or "").strip().lower()
+    mode = (getattr(alert, "mode", None) or "").strip().lower()
 
-        if getattr(alert, "return_end", None) and getattr(alert, "departure_start", None):
-            max_nights = max(1, (alert.return_end - alert.departure_start).days)
-        else:
-            max_nights = None
+    is_flex = (mode == "smart") or (search_mode == "flexible")
 
-        if min_nights and max_nights and min_nights != max_nights:
-            nights_text = f"{min_nights} to {max_nights} nights"
-        elif min_nights:
-            nights_text = f"{min_nights} nights"
-    except Exception:
-        nights_text = None
+    email_type_label = "FlyyvFlex Smart Search Alert" if is_flex else "Flyyv Alert"
+    pill_type_label = "Smart price watch" if is_flex else "Price alert"
 
-    results_link = build_alert_search_link(alert)
+    # Date labels
+    dep_start_label = departure_start.strftime("%d %b %Y") if departure_start else "Not set"
+    dep_end_label = departure_end.strftime("%d %b %Y") if departure_end else "Not set"
+    dep_window_label = f"{dep_start_label} to {dep_end_label}"
 
-    subject = f"{alert_label}: {alert.origin} \u2192 {alert.destination}"
+    # Trip length label (based on min and max nights if we have return windows)
+    trip_length_label = "Flexible"
+    if departure_start and return_start:
+        try:
+            min_nights = max(1, (return_start - departure_start).days)
+            max_nights = min_nights
+            if return_end:
+                max_nights = max(1, (return_end - departure_start).days)
 
-    body_lines = [
-        "Your Flyyv alert has been successfully created.",
-        "",
-        f"Type: {alert_label}",
-        f"Route: {alert.origin} \u2192 {alert.destination}",
-        f"Cabin: {alert.cabin}",
-        f"Departure window: {dep_start} to {dep_end}",
-    ]
+            if min_nights == max_nights:
+                trip_length_label = f"{min_nights} nights"
+            else:
+                trip_length_label = f"{min_nights} to {max_nights} nights"
+        except Exception:
+            trip_length_label = "Flexible"
 
-    if nights_text:
-        body_lines.append(f"Trip length: {nights_text}")
+    # Build results link using the /SearchFlyyv prefix
+    base = FRONTEND_BASE_URL.rstrip("/")
+    results_url = (
+        f"{base}/SearchFlyyv"
+        f"?origin={origin}"
+        f"&destination={destination}"
+        f"&cabin={cabin}"
+        f"&searchMode={'flexible' if is_flex else 'single'}"
+        f"&departureStart={(departure_start.isoformat() if departure_start else '')}"
+        f"&departureEnd={(departure_end.isoformat() if departure_end else '')}"
+        f"&autoSearch=1"
+    )
 
-    body_lines += [
-        "",
-        "We will email you when prices change or match your alert conditions.",
-        "",
-        "View your results and manage this alert:",
-        results_link,
-        "",
-    ]
+    if return_start:
+        results_url += f"&returnStart={return_start.isoformat()}"
+    if return_end:
+        results_url += f"&returnEnd={return_end.isoformat()}"
 
-    body = "\n".join(body_lines)
+    subject = f"{email_type_label}: {origin} \u2192 {destination}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
-    msg.set_content(body)
 
-    # Light HTML version for nicer rendering
+    # Plain text fallback
+    text_body = (
+        f"{email_type_label}\n\n"
+        "Your alert is active.\n\n"
+        f"Route: {origin} \u2192 {destination}\n"
+        f"Cabin: {cabin}\n"
+        f"Departure window: {dep_window_label}\n"
+        f"Trip length: {trip_length_label}\n\n"
+        "View results:\n"
+        f"{results_url}\n"
+    )
+    msg.set_content(text_body)
+
+    # Light HTML version
     html = f"""
     <html>
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
-        <div style="max-width:640px;margin:0 auto;padding:24px;">
-          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:24px;">
+        <div style="max-width:680px;margin:0 auto;padding:24px;">
+          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
+            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{email_type_label}</div>
 
-            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{alert_label}</div>
-
-            <div style="font-size:26px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 10px 0;">
+            <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
               Your alert is active
             </div>
 
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 16px 0;">
-              We are watching <strong>{alert.origin} \u2192 {alert.destination}</strong> and will email you when prices match your alert conditions.
+              We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
             </div>
 
-            <!-- Pills -->
-            <div style="margin:0 0 14px 0;">
-              <span style="display:inline-block;background:#eef2ff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
-                {alert.origin} \u2192 {alert.destination}
+            <div style="margin:0 0 18px 0;">
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+                {origin} \u2192 {destination}
               </span>
-
-              <span style="display:inline-block;background:#ecfdf5;border:1px solid #e6e8ee;color:#065f46;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
-                {str(alert.cabin).upper()}
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;">
+                {cabin}
               </span>
-
-              <span style="display:inline-block;background:#f3f4f6;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
-                {"Smart price watch" if is_flex else "Price alert"}
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+                {pill_type_label}
               </span>
-
-              <span style="display:inline-block;background:#ffffff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
-                {dep_start} to {dep_end}
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;">
+                {dep_window_label}
               </span>
-
-              <span style="display:inline-block;background:#ffffff;border:1px solid #e6e8ee;color:#111827;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;margin:0 8px 8px 0;">
-                {nights_text or ("Flexible" if is_flex else "Not set")}
+              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;">
+                {trip_length_label}
               </span>
             </div>
 
-            <!-- Card -->
             <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
               <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
-
-              <ul style="margin:0;padding-left:18px;color:#111827;font-size:14px;line-height:1.6;">
+              <ul style="margin:0;padding-left:18px;color:#111827;font-size:15px;line-height:1.6;">
                 <li>Scan your selected window for standout prices</li>
                 <li>Notify you when we see meaningful drops or strong value</li>
                 <li>Let you jump straight back into your results anytime</li>
@@ -451,8 +460,8 @@ def send_alert_confirmation_email(alert) -> None:
             </div>
 
             <div style="margin:0 0 18px 0;">
-              <a href="{results_link}"
-                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:12px;font-weight:700;font-size:15px;">
+              <a href="{results_url}"
+                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
                 View results
               </a>
             </div>
@@ -463,7 +472,7 @@ def send_alert_confirmation_email(alert) -> None:
           </div>
 
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
-            Flyyv, <a href="{results_link}" style="color:#9ca3af;text-decoration:none;">Open your results</a>
+            Flyyv, <a href="{results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
           </div>
         </div>
       </body>
