@@ -400,12 +400,14 @@ def send_alert_confirmation_email(alert) -> None:
         f"&autoSearch=1"
     )
 
+        alert_id = getattr(alert, "id", None)
+
     if return_start:
         results_url += f"&returnStart={return_start.isoformat()}"
     if return_end:
         results_url += f"&returnEnd={return_end.isoformat()}"
 
-    subject = f"{email_type_label}: {origin} \u2192 {destination}"
+    subject = f"{email_type_label}: {origin} \u2192 {destination} | {dep_start_label} to {dep_end_label} | {trip_length_label}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
