@@ -303,6 +303,53 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 # ===== END SMART ALERT SUMMARY EMAIL =====
 
 # =======================================
+# SECTION: ALERT CONFIRMATION EMAIL
+# =======================================
+
+# ===== START ALERT CONFIRMATION EMAIL =====
+def send_alert_confirmation_email(alert) -> None:
+    """
+    Sent immediately when a user creates an alert.
+    Confirms the alert is active.
+    """
+    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
+        return
+
+    to_email = getattr(alert, "user_email", None)
+    if not to_email:
+        return
+
+    subject = f"Your Flyyv alert is active: {alert.origin} \u2192 {alert.destination}"
+
+    dep_start = alert.departure_start.strftime("%d %b %Y")
+    dep_end = alert.departure_end.strftime("%d %b %Y")
+
+    body = (
+        "Your Flyyv alert has been successfully created.\n\n"
+        f"Route: {alert.origin} \u2192 {alert.destination}\n"
+        f"Cabin: {alert.cabin}\n"
+        f"Departure window: {dep_start} to {dep_end}\n\n"
+        "We will email you when prices change or match your alert conditions.\n\n"
+        "You can manage or delete this alert anytime in your Flyyv dashboard:\n"
+        f"{FRONTEND_BASE_URL}\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception:
+        pass
+# ===== END ALERT CONFIRMATION EMAIL =====
+
+# =======================================
 # SECTION: EARLY ACCESS WELCOME EMAIL
 # =======================================
 
