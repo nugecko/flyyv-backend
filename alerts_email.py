@@ -108,7 +108,11 @@ def build_alert_search_link(alert) -> str:
         "origin": alert.origin,
         "destination": alert.destination,
         "cabin": alert.cabin,
-        "searchMode": getattr(alert, "search_mode", None) or getattr(alert, "mode", None) or "single",
+                # These fields help the frontend decide whether to run FlyyvFlex or single
+        "searchMode": ("flexible" if (getattr(alert, "mode", None) == "smart" or getattr(alert, "search_mode", None) == "flexible") else "single"),
+        "nights": None,  # set below if we can derive it
+        "mode": getattr(alert, "mode", None),
+        "search_mode": getattr(alert, "search_mode", None),
         "departureStart": alert.departure_start.isoformat() if getattr(alert, "departure_start", None) else None,
         "departureEnd": alert.departure_end.isoformat() if getattr(alert, "departure_end", None) else None,
         "returnStart": alert.return_start.isoformat() if getattr(alert, "return_start", None) else None,
@@ -119,6 +123,14 @@ def build_alert_search_link(alert) -> str:
 
     # remove None values
     params = {k: v for k, v in params.items() if v is not None}
+        # If we can derive a single trip length, include it, this helps /SearchFlyyv choose FlyyvFlex mode
+    try:
+        if getattr(alert, "departure_start", None) and getattr(alert, "return_start", None):
+            nights = max(1, (alert.return_start - alert.departure_start).days)
+            params["nights"] = str(nights)
+    except Exception:
+        pass
+
 
     return f"{base}/SearchFlyyv?{urlencode(params)}"
     
