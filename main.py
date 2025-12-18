@@ -2051,33 +2051,103 @@ def list_routes():
 
 @app.get("/test-email-alert")
 def test_email_alert():
+    """
+    Basic SMTP smoke test.
+    Does NOT send a real Flyyv alert email.
+    """
     send_test_alert_email()
     return {"detail": "Test alert email sent"}
-    
+
+
 @app.get("/test-email-confirmation")
 def test_email_confirmation(email: str = ALERT_TO_EMAIL, flex: int = 0):
     """
     Sends a confirmation-style email using a temporary dummy alert object.
     Use flex=1 to test FlyyvFlex Smart Search Alert behavior.
     """
+
     class DummyAlert:
         user_email = email
         origin = "LON"
         destination = "TLV"
         cabin = "BUSINESS"
+
         departure_start = datetime.utcnow().date()
         departure_end = (datetime.utcnow() + timedelta(days=30)).date()
 
-        # Flex window for trip length testing
         return_start = datetime.utcnow().date() + timedelta(days=7)
         return_end = datetime.utcnow().date() + timedelta(days=14)
 
-        # Toggle between single and smart
         mode = "smart" if flex == 1 else "single"
         search_mode = "flexible" if flex == 1 else "single"
 
     send_alert_confirmation_email(DummyAlert())
     return {"detail": f"Test confirmation email sent to {email}, flex={flex}"}
+
+
+@app.get("/test-email-smart-alert")
+def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
+    """
+    Sends a FlyyvFlex Smart Alert email with dummy scan results.
+    Used to preview the real alert results email HTML.
+    """
+
+    class DummyAlert:
+        user_email = email
+        origin = "LON"
+        destination = "TLV"
+        cabin = "BUSINESS"
+        max_price = 2200
+
+        departure_start = datetime.utcnow().date()
+        departure_end = (datetime.utcnow() + timedelta(days=30)).date()
+
+        return_start = datetime.utcnow().date() + timedelta(days=7)
+        return_end = datetime.utcnow().date() + timedelta(days=7)
+
+        mode = "smart"
+        search_mode = "flexible"
+
+    class DummyOption:
+        def __init__(self, dep, ret, price, airline):
+            self.departureDate = dep
+            self.returnDate = ret
+            self.price = price
+            self.airline = airline
+
+    options = [
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=5)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=12)).date().isoformat(),
+            1890,
+            "British Airways",
+        ),
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=8)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=15)).date().isoformat(),
+            2010,
+            "EL AL",
+        ),
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=11)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=18)).date().isoformat(),
+            2140,
+            "Lufthansa",
+        ),
+    ]
+
+    class DummyParams:
+        origin = "LON"
+        destination = "TLV"
+        cabin = "BUSINESS"
+        passengers = 1
+        earliestDeparture = datetime.utcnow()
+        latestDeparture = datetime.utcnow() + timedelta(days=30)
+        search_mode = "flexible"
+
+    send_smart_alert_email(DummyAlert(), options, DummyParams())
+    return {"detail": f"Test smart alert email sent to {email}"}
+
 
 @app.get("/trigger-daily-alert")
 def trigger_daily_alert(background_tasks: BackgroundTasks):
@@ -2091,8 +2161,8 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_all_alerts_cycle)
     return {"detail": "Alerts cycle queued"}
 
-# ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
+# ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
 # =======================================
 # SECTION: MAIN SEARCH ROUTES
