@@ -2673,11 +2673,14 @@ def create_alert(payload: AlertCreate):
                 detail="Invalid search_mode, expected 'flexible' or 'fixed'",
             )
 
-        # Derive mode from search_mode
-        if search_mode_value == "flexible":
-            mode_value = "smart"
-        else:
-            mode_value = "single"
+                # Decide mode:
+        # payload.mode wins, because FlyyvFlex can still use search_mode="fixed" (fixed nights)
+        mode_value = (payload.mode or "").strip().lower()
+
+        if mode_value not in ("smart", "single"):
+            # Backward compatible fallback
+            mode_value = "smart" if search_mode_value == "flexible" else "single"
+
 
         alert = Alert(
             id=alert_id,
