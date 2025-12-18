@@ -340,20 +340,58 @@ def send_alert_confirmation_email(alert) -> None:
     if not to_email:
         return
 
-    subject = f"Your Flyyv alert is active: {alert.origin} \u2192 {alert.destination}"
-
     dep_start = alert.departure_start.strftime("%d %b %Y")
     dep_end = alert.departure_end.strftime("%d %b %Y")
 
-    body = (
-        "Your Flyyv alert has been successfully created.\n\n"
-        f"Route: {alert.origin} \u2192 {alert.destination}\n"
-        f"Cabin: {alert.cabin}\n"
-        f"Departure window: {dep_start} to {dep_end}\n\n"
-        "We will email you when prices change or match your alert conditions.\n\n"
-        "You can manage or delete this alert anytime in your Flyyv dashboard:\n"
-        f"{FRONTEND_BASE_URL}\n"
-    )
+    is_flex = (getattr(alert, "mode", None) == "smart") or (getattr(alert, "search_mode", None) == "flexible")
+    alert_label = "FlyyvFlex Smart Search Alert" if is_flex else "Flyyv Alert"
+
+    # Nights, if return dates exist
+    nights_text = None
+    try:
+        if getattr(alert, "return_start", None) and getattr(alert, "departure_start", None):
+            min_nights = max(1, (alert.return_start - alert.departure_start).days)
+        else:
+            min_nights = None
+
+        if getattr(alert, "return_end", None) and getattr(alert, "departure_start", None):
+            max_nights = max(1, (alert.return_end - alert.departure_start).days)
+        else:
+            max_nights = None
+
+        if min_nights and max_nights and min_nights != max_nights:
+            nights_text = f"{min_nights} to {max_nights} nights"
+        elif min_nights:
+            nights_text = f"{min_nights} nights"
+    except Exception:
+        nights_text = None
+
+    results_link = build_alert_search_link(alert)
+
+    subject = f"{alert_label}: {alert.origin} \u2192 {alert.destination}"
+
+    body_lines = [
+        "Your Flyyv alert has been successfully created.",
+        "",
+        f"Type: {alert_label}",
+        f"Route: {alert.origin} \u2192 {alert.destination}",
+        f"Cabin: {alert.cabin}",
+        f"Departure window: {dep_start} to {dep_end}",
+    ]
+
+    if nights_text:
+        body_lines.append(f"Trip length: {nights_text}")
+
+    body_lines += [
+        "",
+        "We will email you when prices change or match your alert conditions.",
+        "",
+        "View your results and manage this alert:",
+        results_link,
+        "",
+    ]
+
+    body = "\n".join(body_lines)
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -367,7 +405,7 @@ def send_alert_confirmation_email(alert) -> None:
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:640px;margin:0 auto;padding:24px;">
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:12px;padding:24px;">
-            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">Flyyv Price Alerts</div>
+            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{alert_label}</div>
 
             <div style="font-size:26px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
               Your alert is active
@@ -379,31 +417,38 @@ def send_alert_confirmation_email(alert) -> None:
 
             <div style="border:1px solid #e6e8ee;border-radius:12px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
               <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Alert details</div>
+
               <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
                 <strong>Route:</strong> {alert.origin} \u2192 {alert.destination}
               </div>
+
               <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
                 <strong>Cabin:</strong> {alert.cabin}
               </div>
+
+              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
+                <strong>Trip length:</strong> {nights_text or "Flexible"}
+              </div>
+
               <div style="font-size:15px;color:#111827;margin:0;">
                 <strong>Departure window:</strong> {dep_start} to {dep_end}
               </div>
             </div>
 
             <div style="margin:0 0 18px 0;">
-              <a href="{FRONTEND_BASE_URL}"
+              <a href="{results_link}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
-                Manage alerts
+                View results
               </a>
             </div>
 
             <div style="font-size:12px;color:#6b7280;line-height:1.4;">
-              You are receiving this email because you created a Flyyv price alert.
+              You are receiving this email because you created a Flyyv alert.
             </div>
           </div>
 
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
-            Flyyv, {FRONTEND_BASE_URL}
+            Flyyv, <a href="{results_link}" style="color:#9ca3af;text-decoration:none;">Open your results</a>
           </div>
         </div>
       </body>
