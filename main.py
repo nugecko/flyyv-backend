@@ -2055,10 +2055,10 @@ def test_email_alert():
     return {"detail": "Test alert email sent"}
     
 @app.get("/test-email-confirmation")
-def test_email_confirmation(email: str = ALERT_TO_EMAIL):
+def test_email_confirmation(email: str = ALERT_TO_EMAIL, flex: int = 0):
     """
     Sends a confirmation-style email using a temporary dummy alert object.
-    Use this to verify content and delivery without creating an alert record.
+    Use flex=1 to test FlyyvFlex Smart Search Alert behavior.
     """
     class DummyAlert:
         user_email = email
@@ -2068,8 +2068,16 @@ def test_email_confirmation(email: str = ALERT_TO_EMAIL):
         departure_start = datetime.utcnow().date()
         departure_end = (datetime.utcnow() + timedelta(days=30)).date()
 
+        # Flex window for trip length testing
+        return_start = datetime.utcnow().date() + timedelta(days=7)
+        return_end = datetime.utcnow().date() + timedelta(days=14)
+
+        # Toggle between single and smart
+        mode = "smart" if flex == 1 else "single"
+        search_mode = "flexible" if flex == 1 else "single"
+
     send_alert_confirmation_email(DummyAlert())
-    return {"detail": f"Test confirmation email sent to {email}"}
+    return {"detail": f"Test confirmation email sent to {email}, flex={flex}"}
 
 @app.get("/trigger-daily-alert")
 def trigger_daily_alert(background_tasks: BackgroundTasks):
