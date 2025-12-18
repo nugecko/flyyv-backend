@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Tuple, Any
 
 from fastapi import HTTPException
+from urllib.parse import urlencode
 
 # =======================================
 # SECTION: SMTP CONFIG AND CONSTANTS
@@ -84,7 +85,6 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
         server.send_message(msg)
 # ===== END ONE OFF ALERT EMAIL =====
 
-
 # =======================================
 # SECTION: HELPER LINK BUILDERS
 # =======================================
@@ -100,8 +100,29 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
         f"&cabin={params.cabin}"
         f"&passengers={params.passengers}"
     )
-# ===== END HELPER LINK BUILDERS =====
 
+def build_alert_search_link(alert) -> str:
+    base = FRONTEND_BASE_URL.rstrip("/")
+
+    params = {
+        "origin": alert.origin,
+        "destination": alert.destination,
+        "cabin": alert.cabin,
+        "searchMode": getattr(alert, "search_mode", None) or getattr(alert, "mode", None) or "single",
+        "departureStart": alert.departure_start.isoformat() if getattr(alert, "departure_start", None) else None,
+        "departureEnd": alert.departure_end.isoformat() if getattr(alert, "departure_end", None) else None,
+        "returnStart": alert.return_start.isoformat() if getattr(alert, "return_start", None) else None,
+        "returnEnd": alert.return_end.isoformat() if getattr(alert, "return_end", None) else None,
+        "alertId": getattr(alert, "id", None),
+        "autoSearch": "1",
+    }
+
+    # remove None values
+    params = {k: v for k, v in params.items() if v is not None}
+
+    return f"{base}/?{urlencode(params)}"
+    
+# ===== END HELPER LINK BUILDERS =====
 
 # =======================================
 # SECTION: SMART ALERT SUMMARY EMAIL
