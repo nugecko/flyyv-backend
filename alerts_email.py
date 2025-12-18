@@ -120,7 +120,7 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
 def build_alert_search_link(alert) -> str:
     base = FRONTEND_BASE_URL.rstrip("/")
 
-    params = {
+        params = {
         "origin": alert.origin,
         "destination": alert.destination,
         "cabin": alert.cabin,
@@ -129,15 +129,11 @@ def build_alert_search_link(alert) -> str:
             if (getattr(alert, "mode", None) == "smart" or getattr(alert, "search_mode", None) == "flexible")
             else "single"
         ),
-        "nights": None,  # set below if we can derive it
-        "mode": getattr(alert, "mode", None),
-        "search_mode": getattr(alert, "search_mode", None),
         "departureStart": alert.departure_start.isoformat() if getattr(alert, "departure_start", None) else None,
         "departureEnd": alert.departure_end.isoformat() if getattr(alert, "departure_end", None) else None,
-        "returnStart": alert.return_start.isoformat() if getattr(alert, "return_start", None) else None,
-        "returnEnd": alert.return_end.isoformat() if getattr(alert, "return_end", None) else None,
         "alertId": getattr(alert, "id", None),
         "autoSearch": "1",
+        "nights": None,  # set below if we can derive it
     }
 
     params = {k: v for k, v in params.items() if v is not None}
