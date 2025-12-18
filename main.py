@@ -18,7 +18,11 @@ from sqlalchemy.orm import Session
 from db import engine, Base, SessionLocal
 import models  # noqa: F401
 from models import AdminConfig, AppUser, Alert, AlertRun
-from alerts_email import send_alert_email_for_alert, send_smart_alert_email
+from alerts_email import (
+    send_alert_email_for_alert,
+    send_smart_alert_email,
+    send_alert_confirmation_email,
+)
 
 # =======================================
 # SECTION: ALERT TOGGLES
