@@ -338,7 +338,58 @@ def send_alert_confirmation_email(alert) -> None:
     msg["Subject"] = subject
     msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
-    msg.set_content(body)
+        msg.set_content(body)
+
+    # Light HTML version for nicer rendering
+    html = f"""
+    <html>
+      <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+        <div style="max-width:640px;margin:0 auto;padding:24px;">
+          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:12px;padding:24px;">
+            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">Flyyv Price Alerts</div>
+
+            <div style="font-size:26px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
+              Your alert is active
+            </div>
+
+            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 18px 0;">
+              We will keep watching <strong>{alert.origin} \u2192 {alert.destination}</strong> and email you when prices match your alert conditions.
+            </div>
+
+            <div style="border:1px solid #e6e8ee;border-radius:12px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
+              <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Alert details</div>
+              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
+                <strong>Route:</strong> {alert.origin} \u2192 {alert.destination}
+              </div>
+              <div style="font-size:15px;color:#111827;margin:0 0 6px 0;">
+                <strong>Cabin:</strong> {alert.cabin}
+              </div>
+              <div style="font-size:15px;color:#111827;margin:0;">
+                <strong>Departure window:</strong> {dep_start} to {dep_end}
+              </div>
+            </div>
+
+            <div style="margin:0 0 18px 0;">
+              <a href="{FRONTEND_BASE_URL}"
+                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
+                Manage alerts
+              </a>
+            </div>
+
+            <div style="font-size:12px;color:#6b7280;line-height:1.4;">
+              You are receiving this email because you created a Flyyv price alert.
+            </div>
+          </div>
+
+          <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
+            Flyyv, {FRONTEND_BASE_URL}
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    msg.add_alternative(html, subtype="html")
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
