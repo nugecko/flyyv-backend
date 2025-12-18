@@ -120,7 +120,7 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
 def build_alert_search_link(alert) -> str:
     base = FRONTEND_BASE_URL.rstrip("/")
 
-        params = {
+    params = {
         "origin": alert.origin,
         "destination": alert.destination,
         "cabin": alert.cabin,
