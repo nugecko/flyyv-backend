@@ -2174,8 +2174,8 @@ def get_alerts(
                     last_price=a.last_price,
                     best_price=best_price,
                     last_run_at=a.last_run_at,
-                    last_notified_at=a.last_notified_at,
-                    last_notified_price=a.last_notified_price,
+                    last_notified_at=getattr(a, "last_notified_at", None),
+                    last_notified_price=getattr(a, "last_notified_price", None),
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                 )
