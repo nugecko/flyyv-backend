@@ -2734,8 +2734,8 @@ def create_alert(payload: AlertCreate):
         alert_id = str(uuid4())
         now = datetime.utcnow()
 
-                # Decide search_mode and derive mode
-        search_mode_value = payload.search_mode or "flexible"
+        # Decide search_mode and derive mode
+        search_mode_value = (payload.search_mode or "flexible").strip().lower()
 
         if search_mode_value not in ("flexible", "fixed"):
             raise HTTPException(
@@ -2743,25 +2743,28 @@ def create_alert(payload: AlertCreate):
                 detail="Invalid search_mode, expected 'flexible' or 'fixed'",
             )
 
-                # Decide mode:
-        # payload.mode wins, because FlyyvFlex can still use search_mode="fixed" (fixed nights)
+        # Decide mode
         mode_value = (payload.mode or "").strip().lower()
 
-        if mode_value not in ("smart", "single"):
-            # Backward compatible fallback
-            mode_value = "smart" if search_mode_value == "flexible" else "single"
-                # FlyyvFlex rule:
-        # Fixed trip length + date window = smart alert
-        if (
-            payload.mode == "smart"
-            or (
-                search_mode_value == "fixed"
-                and payload.departure_start
-                and payload.departure_end
-                and payload.return_start
-            )
-        ):
+        # Absolute rule: any flexible window alert is a smart alert
+        if search_mode_value == "flexible":
             mode_value = "smart"
+        else:
+            # For non-flexible alerts, allow explicit mode if valid
+            if mode_value not in ("smart", "single"):
+                mode_value = "single"
+
+            # Fixed trip length + date window = smart alert
+            if (
+                payload.mode == "smart"
+                or (
+                    search_mode_value == "fixed"
+                    and payload.departure_start
+                    and payload.departure_end
+                    and payload.return_start
+                )
+            ):
+                mode_value = "smart
 
         alert = Alert(
             id=alert_id,
