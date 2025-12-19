@@ -1,14 +1,15 @@
 import os
 import smtplib
 from email.message import EmailMessage
-from datetime import datetime, timedelta, date
-from typing import List, Dict, Tuple, Any, Optional
-from urllib.parse import urlencode
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Tuple, Any, Optional, Union
 
 from fastapi import HTTPException
+from urllib.parse import urlencode
+
 
 # =======================================
-# START SECTION: SMTP CONFIG AND CONSTANTS
+# SECTION START: SMTP CONFIG AND CONSTANTS
 # =======================================
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.smtp2go.com")
@@ -19,61 +20,175 @@ ALERT_FROM_EMAIL = os.environ.get("ALERT_FROM_EMAIL", "alert@flyyv.com")
 
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "https://flyyv.com")
 
-# =====================================
-# END SECTION: SMTP CONFIG AND CONSTANTS
-# =====================================
+# =======================================
+# SECTION END: SMTP CONFIG AND CONSTANTS
+# =======================================
 
 
 # =======================================
-# START SECTION: SMTP SENDER UTILITIES
+# SECTION START: EMAIL SENDING HELPERS
 # =======================================
 
-def _smtp_ready_or_raise() -> None:
-    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
+def _smtp_ready() -> bool:
+    return bool(SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL)
+
+def send_email(to_email: str, subject: str, text_body: str, html_body: Optional[str] = None) -> None:
+    if not _smtp_ready():
         raise HTTPException(
             status_code=500,
             detail="SMTP settings are not fully configured on the server",
         )
 
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
+    msg["To"] = to_email
+    msg.set_content(text_body)
 
-def _send_email_message(msg: EmailMessage) -> None:
-    _smtp_ready_or_raise()
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
+
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
 
-
-def send_single_email(to_email: str, subject: str, body: str) -> None:
-    _smtp_ready_or_raise()
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
-    msg["To"] = to_email
-    msg.set_content(body)
-    _send_email_message(msg)
-
-# =====================================
-# END SECTION: SMTP SENDER UTILITIES
-# =====================================
+# =======================================
+# SECTION END: EMAIL SENDING HELPERS
+# =======================================
 
 
 # =======================================
-# START SECTION: LINK BUILDERS
+# SECTION START: GENERIC FIELD HELPERS
 # =======================================
 
-def build_flyyv_link(params, departure: str, return_date: str) -> str:
+def get_int(obj: Any, field: str, default: int) -> int:
+    try:
+        val = getattr(obj, field, None)
+        if val is None:
+            return default
+        return int(val)
+    except Exception:
+        return default
+
+def get_str(obj: Any, field: str, default: str = "") -> str:
+    try:
+        val = getattr(obj, field, None)
+        return default if val is None else str(val)
+    except Exception:
+        return default
+
+def safe_date_label(d: Optional[date]) -> str:
+    if not d:
+        return "Not set"
+    return d.strftime("%d %b %Y")
+
+def compute_trip_nights(alert: Any) -> Optional[int]:
     """
-    Deep link to a specific date pair result.
-    Must use /SearchFlyyv and autoSearch=1.
-    Must use searchMode=single for drilldowns.
+    Best effort:
+    - If return_start and departure_start exist, use the difference
+    - Else if alert.nights exists, use it
+    """
+    try:
+        dep = getattr(alert, "departure_start", None)
+        ret = getattr(alert, "return_start", None)
+        if dep and ret:
+            return max(1, (ret - dep).days)
+    except Exception:
+        pass
+
+    try:
+        nights = getattr(alert, "nights", None)
+        if nights is not None:
+            return max(1, int(nights))
+    except Exception:
+        pass
+
+    return None
+
+def compute_flex_combinations(alert: Any) -> Optional[int]:
+    """
+    For fixed-night flexible alerts, combinations should represent how many departure dates are valid.
+    We assume the scan is for dep in [departure_start..departure_end] with a fixed nights length.
+    If return_end exists, we only count departure dates where dep + nights <= return_end.
+
+    If nights is not known, fall back to a simple inclusive window size.
+    """
+    dep_start = getattr(alert, "departure_start", None)
+    dep_end = getattr(alert, "departure_end", None)
+    if not dep_start or not dep_end:
+        return None
+
+    if dep_end < dep_start:
+        return None
+
+    nights = compute_trip_nights(alert)
+    ret_end = getattr(alert, "return_end", None)
+
+    total_days = (dep_end - dep_start).days + 1
+    if total_days < 1:
+        return None
+
+    if not nights:
+        return total_days
+
+    if not ret_end:
+        # No explicit return_end, count all departure days in the dep window
+        return total_days
+
+    # Count only departure dates that keep the return inside the return window
+    valid = 0
+    cur = dep_start
+    while cur <= dep_end:
+        ret = cur + timedelta(days=nights)
+        if ret <= ret_end:
+            valid += 1
+        cur += timedelta(days=1)
+
+    return valid if valid > 0 else None
+
+def format_price(total_price_gbp: int, passengers: int) -> Tuple[str, Optional[str]]:
+    """
+    Duffel total_amount reflects the total for the requested passengers.
+    We show total, and optionally per-person if passengers > 1.
+    """
+    total_label = f"£{int(total_price_gbp)}"
+    if passengers and passengers > 1:
+        try:
+            per_person = int(round(total_price_gbp / float(passengers)))
+            return total_label, f"~£{per_person} pp"
+        except Exception:
+            return total_label, None
+    return total_label, None
+
+# =======================================
+# SECTION END: GENERIC FIELD HELPERS
+# =======================================
+
+
+# =======================================
+# SECTION START: HELPER LINK BUILDERS
+# =======================================
+
+def build_flyyv_link(obj: Any, departure: str, return_date: str) -> str:
+    """
+    Builds a deep link to Flyyv search results for a specific date pair.
+    Always uses /SearchFlyyv and autoSearch=1.
+    Drilldowns must use searchMode=single.
+    Includes passengers when available to prevent frontend defaulting to 1 pax.
     """
     base = FRONTEND_BASE_URL.rstrip("/")
 
-    qp = {
-        "origin": params.origin,
-        "destination": params.destination,
-        "cabin": params.cabin,
+    origin = get_str(obj, "origin")
+    destination = get_str(obj, "destination")
+    cabin = get_str(obj, "cabin", "BUSINESS")
+    passengers = get_int(obj, "passengers", 1)
+
+    qp: Dict[str, Any] = {
+        "origin": origin,
+        "destination": destination,
+        "cabin": cabin,
+        "passengers": str(passengers),
         "searchMode": "single",
         "departureStart": departure,
         "departureEnd": departure,
@@ -82,309 +197,184 @@ def build_flyyv_link(params, departure: str, return_date: str) -> str:
         "autoSearch": "1",
     }
 
-    # Pass through alertId when available
-    alert_id = (
-        getattr(params, "alertId", None)
-        or getattr(params, "alert_id", None)
-        or getattr(params, "id", None)
-    )
+    alert_id = getattr(obj, "id", None) or getattr(obj, "alertId", None) or getattr(obj, "alert_id", None)
     if alert_id is not None:
         qp["alertId"] = str(alert_id)
 
     return f"{base}/SearchFlyyv?{urlencode(qp)}"
 
 
-def build_alert_search_link(alert) -> str:
+def build_alert_search_link(alert: Any) -> str:
     """
-    Deep link to the original alert window.
-    Must recreate the window context.
+    Builds the full results deep link for the original alert window.
+    Includes passengers so the frontend runs the correct pax.
     """
     base = FRONTEND_BASE_URL.rstrip("/")
 
-    is_flex = (
-        getattr(alert, "mode", None) == "smart"
-        or getattr(alert, "search_mode", None) == "flexible"
-    )
+    origin = get_str(alert, "origin")
+    destination = get_str(alert, "destination")
+    cabin = get_str(alert, "cabin", "BUSINESS")
+    passengers = get_int(alert, "passengers", 1)
 
-    qp = {
-        "origin": getattr(alert, "origin", ""),
-        "destination": getattr(alert, "destination", ""),
-        "cabin": getattr(alert, "cabin", "BUSINESS"),
+    mode = (get_str(alert, "mode") or "").strip().lower()
+    search_mode = (get_str(alert, "search_mode") or "").strip().lower()
+    is_flex = (mode == "smart") or (search_mode == "flexible")
+
+    dep_start = getattr(alert, "departure_start", None)
+    dep_end = getattr(alert, "departure_end", None)
+    ret_start = getattr(alert, "return_start", None)
+    ret_end = getattr(alert, "return_end", None)
+
+    qp: Dict[str, Any] = {
+        "origin": origin,
+        "destination": destination,
+        "cabin": cabin,
+        "passengers": str(passengers),
         "searchMode": "flexible" if is_flex else "single",
-        "departureStart": alert.departure_start.isoformat() if getattr(alert, "departure_start", None) else None,
-        "departureEnd": alert.departure_end.isoformat() if getattr(alert, "departure_end", None) else None,
-        "returnStart": alert.return_start.isoformat() if getattr(alert, "return_start", None) else None,
-        "returnEnd": alert.return_end.isoformat() if getattr(alert, "return_end", None) else None,
+        "departureStart": dep_start.isoformat() if dep_start else None,
+        "departureEnd": dep_end.isoformat() if dep_end else None,
+        "returnStart": ret_start.isoformat() if ret_start else None,
+        "returnEnd": ret_end.isoformat() if ret_end else None,
         "alertId": getattr(alert, "id", None),
         "autoSearch": "1",
     }
 
-    # Include passengers if present, so UI reflects alert settings
-    passengers = getattr(alert, "passengers", None)
-    if passengers is not None:
-        try:
-            qp["passengers"] = str(max(1, int(passengers)))
-        except Exception:
-            pass
+    nights = compute_trip_nights(alert)
+    if nights:
+        qp["nights"] = str(nights)
 
     qp = {k: v for k, v in qp.items() if v is not None and v != ""}
 
     return f"{base}/SearchFlyyv?{urlencode(qp)}"
 
-# =====================================
-# END SECTION: LINK BUILDERS
-# =====================================
+# =======================================
+# SECTION END: HELPER LINK BUILDERS
+# =======================================
 
 
 # =======================================
-# START SECTION: ALERT MATH HELPERS
+# SECTION START: ONE OFF ALERT EMAIL
 # =======================================
 
-def _derive_nights_label(alert, is_flex: bool) -> str:
-    """
-    Returns a friendly label like "7 nights" or "Flexible".
-    """
-    try:
-        dep_start = getattr(alert, "departure_start", None)
-        ret_start = getattr(alert, "return_start", None)
-        if dep_start and ret_start:
-            nights = max(1, (ret_start - dep_start).days)
-            return f"{nights} nights"
-
-        nights_val = getattr(alert, "nights", None)
-        if nights_val is not None:
-            return f"{max(1, int(nights_val))} nights"
-
-        if not is_flex:
-            return "Not set"
-    except Exception:
-        pass
-
-    return "Flexible"
-
-
-def _estimate_combinations_for_confirmation(alert) -> Optional[int]:
-    """
-    Produces a realistic combinations count for the confirmation email.
-    Uses the same constraints as the scan:
-    - window days
-    - stay range
-    - MAX_DATE_PAIRS and MAX_DATE_PAIRS_PER_ALERT caps (if available)
-    """
-    dep_start = getattr(alert, "departure_start", None)
-    dep_end = getattr(alert, "departure_end", None)
-    if not dep_start or not dep_end:
-        return None
-
-    try:
-        window_days = (dep_end - dep_start).days + 1
-        if window_days <= 0:
-            return None
-    except Exception:
-        return None
-
-    # Try to read stay range from alert, fallback to fixed nights derived from stored dates
-    min_stay = getattr(alert, "minStayDays", None) or getattr(alert, "min_stay_days", None)
-    max_stay = getattr(alert, "maxStayDays", None) or getattr(alert, "max_stay_days", None)
-
-    if min_stay is None or max_stay is None:
-        try:
-            ret_start = getattr(alert, "return_start", None)
-            if ret_start:
-                fixed = max(1, (ret_start - dep_start).days)
-                min_stay = fixed
-                max_stay = fixed
-        except Exception:
-            min_stay = 1
-            max_stay = 1
-
-    try:
-        min_stay = max(1, int(min_stay))
-        max_stay = max(min_stay, int(max_stay))
-    except Exception:
-        min_stay = 1
-        max_stay = 1
-
-    # Match generate_date_pairs behaviour: ret <= departure_end
-    theoretical = 0
-    for stay in range(min_stay, max_stay + 1):
-        theoretical += max(0, window_days - stay)
-
-    if theoretical <= 0:
-        return None
-
-    # Apply caps if these helpers exist in runtime
-    max_pairs_cap: Optional[int] = None
-    try:
-        # If you have config helpers, use them, otherwise fallback to typical defaults
-        get_config_int = globals().get("get_config_int")
-        if callable(get_config_int):
-            cap_a = int(get_config_int("MAX_DATE_PAIRS", 60))
-            cap_b = int(get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40))
-        else:
-            cap_a = 60
-            cap_b = 40
-
-        hard_cap = int(globals().get("MAX_DATE_PAIRS_HARD", 60))
-        max_pairs_cap = max(1, min(cap_a, hard_cap))
-        if cap_b:
-            max_pairs_cap = min(max_pairs_cap, cap_b)
-    except Exception:
-        max_pairs_cap = None
-
-    if max_pairs_cap is not None:
-        return min(theoretical, max_pairs_cap)
-
-    return theoretical
-
-
-def _passengers_label(alert) -> Tuple[int, str]:
-    try:
-        passengers = int(getattr(alert, "passengers", 1) or 1)
-    except Exception:
-        passengers = 1
-    passengers = max(1, passengers)
-    label = "1 passenger" if passengers == 1 else f"{passengers} passengers"
-    return passengers, label
-
-# =====================================
-# END SECTION: ALERT MATH HELPERS
-# =====================================
-
-
-# =======================================
-# START SECTION: ONE OFF ALERT EMAIL
-# =======================================
-
-def send_alert_email_for_alert(alert, cheapest, params) -> None:
+def send_alert_email_for_alert(alert: Any, cheapest: Any, params: Any) -> None:
     """
     One off alert email:
     single date pair, simple format.
     """
-    _smtp_ready_or_raise()
-
     to_email = getattr(alert, "user_email", None)
     if not to_email:
         raise HTTPException(status_code=500, detail="Alert has no user_email")
 
-    passengers, passengers_label = _passengers_label(alert)
+    passengers = get_int(alert, "passengers", 1)
 
-    subject = (
-        f"Flyyv Alert: {alert.origin} \u2192 {alert.destination} "
-        f"from £{int(cheapest.price)}"
-    )
+    price_total = int(getattr(cheapest, "price", 0))
+    total_label, pp_label = format_price(price_total, passengers)
 
-    dep_dt = datetime.fromisoformat(cheapest.departureDate)
-    ret_dt = datetime.fromisoformat(cheapest.returnDate)
+    subject = f"Flyyv Alert: {alert.origin} \u2192 {alert.destination} from {total_label}"
+
+    dep_dt = datetime.fromisoformat(getattr(cheapest, "departureDate"))
+    ret_dt = datetime.fromisoformat(getattr(cheapest, "returnDate"))
     dep_label = dep_dt.strftime("%d %b %Y")
     ret_label = ret_dt.strftime("%d %b %Y")
 
     lines: List[str] = []
-    lines.append(f"Flyyv Alert")
-    lines.append(f"Route: {alert.origin} \u2192 {alert.destination}, {alert.cabin.title()} class")
-    lines.append(f"Passengers: {passengers_label}")
+    lines.append(f"Route: {alert.origin} \u2192 {alert.destination}, {get_str(alert, 'cabin', 'BUSINESS').title()} class")
+    lines.append(f"Passengers: {passengers}")
+    lines.append("Price shown is the total for all passengers.")
+    if pp_label:
+        lines.append(f"Approx per person: {pp_label.replace('~', '')}")
     lines.append(f"Dates: {dep_label} to {ret_label}")
     lines.append("")
-    lines.append(
-        f"Best price found: £{int(cheapest.price)} "
-        f"with {cheapest.airline} ({cheapest.airlineCode or ''})"
-    )
-    lines.append(f"Prices shown are for {passengers_label} (total).")
+    lines.append(f"Best price found: {total_label} with {get_str(cheapest, 'airline')} ({get_str(cheapest, 'airlineCode')})")
     lines.append("")
-    lines.append("Open your results:")
-    lines.append(build_alert_search_link(alert))
+    lines.append("View results:")
+    lines.append(build_flyyv_link(alert, getattr(cheapest, "departureDate"), getattr(cheapest, "returnDate")))
     lines.append("")
     lines.append("You are receiving this because you created a Flyyv price alert.")
     lines.append("To stop these alerts, delete the alert in your Flyyv profile.")
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
-    msg["To"] = to_email
-    msg.set_content("\n".join(lines))
+    send_email(to_email=to_email, subject=subject, text_body="\n".join(lines), html_body=None)
 
-    _send_email_message(msg)
-
-# =====================================
-# END SECTION: ONE OFF ALERT EMAIL
-# =====================================
+# =======================================
+# SECTION END: ONE OFF ALERT EMAIL
+# =======================================
 
 
 # =======================================
-# START SECTION: SMART ALERT SUMMARY EMAIL
+# SECTION START: SMART ALERT SUMMARY EMAIL
 # =======================================
 
-def send_smart_alert_email(alert, options: List, params) -> None:
+def send_smart_alert_email(alert: Any, options: List[Any], params: Any) -> None:
     """
-    FlyyvFlex results email.
-    Shows top cheapest date pairs and deep links per pair.
-    """
-    _smtp_ready_or_raise()
+    FlyyvFlex results email:
+    scans multiple date pairs in a flexible window and produces a summary message.
 
+    Requirements:
+    - Users care about Best price, not Max
+    - Show top 5 cheapest date pairs
+    - Per-row CTA drills into single date pair results
+    - Full results CTA recreates original window
+    """
     to_email = getattr(alert, "user_email", None)
     if not to_email:
         raise HTTPException(status_code=500, detail="Alert has no user_email")
 
     threshold = getattr(alert, "max_price", None)
-    origin = getattr(alert, "origin", "")
-    destination = getattr(alert, "destination", "")
-    cabin = getattr(alert, "cabin", "BUSINESS")
+    origin = get_str(alert, "origin")
+    destination = get_str(alert, "destination")
+    cabin = get_str(alert, "cabin", "BUSINESS")
+    passengers = get_int(alert, "passengers", 1)
 
-    passengers, passengers_label = _passengers_label(alert)
-
-    # Remove temporary debug once confirmed stable
-    grouped: Dict[Tuple[str, str], List] = {}
+    grouped: Dict[Tuple[str, str], List[Any]] = {}
     for opt in options:
-        key = (opt.departureDate, opt.returnDate)
-        grouped.setdefault(key, []).append(opt)
+        key = (getattr(opt, "departureDate", None), getattr(opt, "returnDate", None))
+        if key[0] and key[1]:
+            grouped.setdefault(key, []).append(opt)
 
     any_under = False
     pairs_summary: List[Dict[str, Any]] = []
 
     for dep_iso, ret_iso in grouped.keys():
         flights = grouped[(dep_iso, ret_iso)]
-        prices = [o.price for o in flights if getattr(o, "price", None) is not None]
+        prices = [getattr(o, "price", None) for o in flights if getattr(o, "price", None) is not None]
         if not prices:
             continue
 
         min_price = min(prices)
-        cheapest = min(flights, key=lambda o: o.price)
+        cheapest = min(flights, key=lambda o: getattr(o, "price", 10**18))
 
-        flights_under: List = []
+        flights_under: List[Any] = []
         if threshold is not None:
-            flights_under = [o for o in flights if o.price <= float(threshold)]
+            try:
+                flights_under = [o for o in flights if float(getattr(o, "price", 0)) <= float(threshold)]
+            except Exception:
+                flights_under = []
             if flights_under:
                 any_under = True
 
-        flyyv_link = build_flyyv_link(params, dep_iso, ret_iso)
+        flyyv_link = build_flyyv_link(alert, dep_iso, ret_iso)
 
         pairs_summary.append(
             {
                 "departureDate": dep_iso,
                 "returnDate": ret_iso,
                 "totalFlights": len(flights),
-                "cheapestPrice": cheapest.price,
-                "cheapestAirline": cheapest.airline,
-                "flightsUnderThresholdCount": len(flights_under),
+                "cheapestPrice": float(getattr(cheapest, "price", 0)),
+                "cheapestAirline": getattr(cheapest, "airline", None),
                 "flyyvLink": flyyv_link,
-                "minPrice": min_price,
+                "minPrice": float(min_price),
             }
         )
 
     start_label = params.earliestDeparture.strftime("%d %b %Y")
     end_label = params.latestDeparture.strftime("%d %b %Y")
 
-    nights_label = None
-    try:
-        if getattr(alert, "departure_start", None) and getattr(alert, "return_start", None):
-            nights_val = max(1, (alert.return_start - alert.departure_start).days)
-            nights_label = f"{nights_val}"
-    except Exception:
-        nights_label = None
+    nights_val = compute_trip_nights(alert)
+    nights_text = str(nights_val) if nights_val else None
 
     combinations_checked = len(pairs_summary)
 
-    best_price_overall = None
+    best_price_overall: Optional[int] = None
     if pairs_summary:
         try:
             best_price_overall = int(min(pairs_summary, key=lambda x: x["cheapestPrice"])["cheapestPrice"])
@@ -392,7 +382,8 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             best_price_overall = None
 
     if best_price_overall is not None:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} from £{best_price_overall}"
+        subject_total, _pp = format_price(best_price_overall, passengers)
+        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} from {subject_total}"
     elif threshold is not None and any_under:
         subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} fares under £{int(threshold)}"
     else:
@@ -402,26 +393,26 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         p for p in pairs_summary
         if p.get("totalFlights", 0) > 0 and p.get("cheapestPrice") is not None
     ]
-    top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
 
+    top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
     open_full_results_url = build_alert_search_link(alert)
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
-    msg["To"] = to_email
-
+    # Plain text
     lines: List[str] = []
     lines.append("FlyyvFlex Smart Search Alert")
-    lines.append(f"Route: {origin} \u2192 {destination}, {str(cabin).title()} class")
-    lines.append(f"Passengers: {passengers_label}")
-    if nights_label:
-        lines.append(f"Trip length: {nights_label} nights")
+    lines.append(f"Route: {origin} \u2192 {destination}, {cabin.title()} class")
+    lines.append(f"Passengers: {passengers}")
+    lines.append("Prices shown are the total for all passengers.")
+    if nights_text:
+        lines.append(f"Trip length: {nights_text} nights")
     lines.append(f"Date window: {start_label} to {end_label}")
     lines.append(f"Combinations checked: {combinations_checked}")
     if best_price_overall is not None:
-        lines.append(f"Best price found: £{best_price_overall}")
-    lines.append(f"Prices shown are for {passengers_label} (total).")
+        best_total, best_pp = format_price(best_price_overall, passengers)
+        if best_pp:
+            lines.append(f"Best price found: {best_total} ({best_pp})")
+        else:
+            lines.append(f"Best price found: {best_total}")
     lines.append("")
     lines.append("Top 5 cheapest date combinations:")
     lines.append("")
@@ -434,17 +425,25 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             ret_dt = datetime.fromisoformat(p["returnDate"])
             dep_label = dep_dt.strftime("%d %b %Y")
             ret_label = ret_dt.strftime("%d %b %Y")
-            price_label = int(p["cheapestPrice"])
+
+            price_total = int(p["cheapestPrice"])
+            total_label, pp_label = format_price(price_total, passengers)
+
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
-            lines.append(f"£{price_label} | {dep_label} to {ret_label} | {airline_label}")
+
+            if pp_label:
+                lines.append(f"{total_label} ({pp_label}) | {dep_label} to {ret_label} | {airline_label}")
+            else:
+                lines.append(f"{total_label} | {dep_label} to {ret_label} | {airline_label}")
+
             lines.append(f"View flight: {p.get('flyyvLink')}")
             lines.append("")
 
     lines.append("Open full results:")
     lines.append(open_full_results_url)
+    text_body = "\n".join(lines)
 
-    msg.set_content("\n".join(lines))
-
+    # HTML rows
     rows_html = ""
     for p in top_pairs_sorted:
         dep_dt = datetime.fromisoformat(p["departureDate"])
@@ -452,16 +451,20 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         dep_label = dep_dt.strftime("%d %b %Y")
         ret_label = ret_dt.strftime("%d %b %Y")
 
-        price_label = int(p["cheapestPrice"])
+        price_total = int(p["cheapestPrice"])
+        total_label, pp_label = format_price(price_total, passengers)
+
         airline_label = p.get("cheapestAirline") or "Multiple airlines"
         view_link = p.get("flyyvLink") or open_full_results_url
 
         within = False
         try:
-            if threshold is not None and float(price_label) <= float(threshold):
+            if threshold is not None and float(price_total) <= float(threshold):
                 within = True
         except Exception:
             within = False
+
+        pp_html = f'<div style="font-size:12px;color:#6b7280;margin-top:2px;">{pp_label}</div>' if pp_label else ""
 
         rows_html += f"""
           <tr>
@@ -479,8 +482,9 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                     {('<span style="color:#059669;font-weight:700;">, within your limit</span>' if within else '')}
                   </div>
                 </div>
-                <div style="text-align:right;min-width:120px;">
-                  <div style="font-size:18px;color:#111827;font-weight:800;">£{price_label}</div>
+                <div style="text-align:right;min-width:140px;">
+                  <div style="font-size:18px;color:#111827;font-weight:800;">{total_label}</div>
+                  {pp_html}
                   <div style="margin-top:6px;">
                     <a href="{view_link}" style="font-size:13px;color:#2563eb;text-decoration:underline;font-weight:700;">
                       View flight
@@ -494,11 +498,18 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 
     best_chip = ""
     if best_price_overall is not None:
+        best_total, best_pp = format_price(best_price_overall, passengers)
         best_chip = f"""
         <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
-          Best £{int(best_price_overall)}
+          Best {best_total}{f" ({best_pp})" if best_pp else ""}
         </span>
         """
+
+    passengers_chip = f"""
+      <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+        {passengers} passenger{'' if passengers == 1 else 's'}
+      </span>
+    """
 
     html = f"""
     <html>
@@ -511,22 +522,20 @@ def send_smart_alert_email(alert, options: List, params) -> None:
               Top deals for {origin} \u2192 {destination}
             </div>
 
-            <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
+            <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 6px 0;">
               Based on a full scan of your <strong>{start_label} to {end_label}</strong> window
-              {f" for <strong>{nights_label}-night</strong> trips" if nights_label else ""}.
+              {f" for <strong>{nights_text}-night</strong> trips" if nights_text else ""}.
             </div>
 
-            <div style="margin:0 0 10px 0;font-size:13px;color:#6b7280;">
-              Prices shown are for {passengers_label} (total).
+            <div style="font-size:13px;color:#6b7280;margin:0 0 14px 0;">
+              Prices shown are the total for all passengers.
             </div>
 
             <div style="margin:0 0 16px 0;">
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:800;margin-right:8px;margin-bottom:8px;">
                 {cabin}
               </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {passengers_label}
-              </span>
+              {passengers_chip}
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {combinations_checked} combinations
               </span>
@@ -564,86 +573,83 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     </html>
     """
 
-    msg.add_alternative(html, subtype="html")
-    _send_email_message(msg)
+    send_email(to_email=to_email, subject=subject, text_body=text_body, html_body=html)
 
-# =====================================
-# END SECTION: SMART ALERT SUMMARY EMAIL
-# =====================================
+# =======================================
+# SECTION END: SMART ALERT SUMMARY EMAIL
+# =======================================
 
 
 # =======================================
-# START SECTION: ALERT CONFIRMATION EMAIL
+# SECTION START: ALERT CONFIRMATION EMAIL
 # =======================================
 
-def send_alert_confirmation_email(alert) -> None:
+def send_alert_confirmation_email(alert: Any) -> None:
     """
     Sent immediately when a user creates an alert.
     Confirms the alert is active.
     """
-    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
+    if not _smtp_ready():
         return
 
     to_email = getattr(alert, "user_email", None)
     if not to_email:
         return
 
-    origin = getattr(alert, "origin", "")
-    destination = getattr(alert, "destination", "")
-    cabin = getattr(alert, "cabin", "BUSINESS")
+    origin = get_str(alert, "origin")
+    destination = get_str(alert, "destination")
+    cabin = get_str(alert, "cabin", "BUSINESS")
+    passengers = get_int(alert, "passengers", 1)
 
     departure_start = getattr(alert, "departure_start", None)
     departure_end = getattr(alert, "departure_end", None)
     return_start = getattr(alert, "return_start", None)
     return_end = getattr(alert, "return_end", None)
 
-    search_mode = (getattr(alert, "search_mode", None) or "").strip().lower()
-    mode = (getattr(alert, "mode", None) or "").strip().lower()
+    search_mode = (get_str(alert, "search_mode") or "").strip().lower()
+    mode = (get_str(alert, "mode") or "").strip().lower()
     is_flex = (mode == "smart") or (search_mode == "flexible")
 
     email_type_label = "FlyyvFlex Smart Search Alert" if is_flex else "Flyyv Alert"
     pill_type_label = "Smart price watch" if is_flex else "Price alert"
 
-    dep_start_label = departure_start.strftime("%d %b %Y") if departure_start else "Not set"
-    dep_end_label = departure_end.strftime("%d %b %Y") if departure_end else "Not set"
+    dep_start_label = safe_date_label(departure_start)
+    dep_end_label = safe_date_label(departure_end)
     dep_window_label = f"{dep_start_label} to {dep_end_label}"
 
-    trip_length_label = _derive_nights_label(alert, is_flex)
+    nights = compute_trip_nights(alert)
+    trip_length_label = f"{nights} nights" if nights else ("Flexible" if is_flex else "Not set")
 
-    passengers, passengers_label = _passengers_label(alert)
-
-    combinations_checked = _estimate_combinations_for_confirmation(alert)
+    combinations_checked = compute_flex_combinations(alert) if is_flex else None
 
     base = FRONTEND_BASE_URL.rstrip("/")
-    results_url = (
-        f"{base}/SearchFlyyv"
-        f"?origin={origin}"
-        f"&destination={destination}"
-        f"&cabin={cabin}"
-        f"&passengers={passengers}"
-        f"&searchMode={'flexible' if is_flex else 'single'}"
-        f"&departureStart={(departure_start.isoformat() if departure_start else '')}"
-        f"&departureEnd={(departure_end.isoformat() if departure_end else '')}"
-        f"&autoSearch=1"
-    )
+    results_qp: Dict[str, Any] = {
+        "origin": origin,
+        "destination": destination,
+        "cabin": cabin,
+        "passengers": str(passengers),
+        "searchMode": "flexible" if is_flex else "single",
+        "departureStart": departure_start.isoformat() if departure_start else "",
+        "departureEnd": departure_end.isoformat() if departure_end else "",
+        "autoSearch": "1",
+        "alertId": getattr(alert, "id", None),
+    }
 
     if return_start:
-        results_url += f"&returnStart={return_start.isoformat()}"
+        results_qp["returnStart"] = return_start.isoformat()
     if return_end:
-        results_url += f"&returnEnd={return_end.isoformat()}"
+        results_qp["returnEnd"] = return_end.isoformat()
+    if nights:
+        results_qp["nights"] = str(nights)
+
+    results_qp = {k: v for k, v in results_qp.items() if v not in (None, "")}
+    results_url = f"{base}/SearchFlyyv?{urlencode(results_qp)}"
 
     alert_id = getattr(alert, "id", None)
 
-    subject = (
-        f"{email_type_label}: {origin} \u2192 {destination} | "
-        f"{dep_start_label} to {dep_end_label} | {trip_length_label}"
-    )
+    subject = f"{email_type_label}: {origin} \u2192 {destination} | {dep_start_label} to {dep_end_label} | {trip_length_label}"
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
-    msg["To"] = to_email
-
+    # Plain text
     text_lines: List[str] = []
     text_lines.append(email_type_label)
     text_lines.append("")
@@ -651,19 +657,21 @@ def send_alert_confirmation_email(alert) -> None:
     text_lines.append("")
     text_lines.append(f"Route: {origin} \u2192 {destination}")
     text_lines.append(f"Cabin: {cabin}")
-    text_lines.append(f"Passengers: {passengers_label}")
+    text_lines.append(f"Passengers: {passengers}")
+    text_lines.append("Prices shown are the total for all passengers.")
     text_lines.append(f"Departure window: {dep_window_label}")
     text_lines.append(f"Trip length: {trip_length_label}")
     if combinations_checked:
-        text_lines.append(f"Combinations checked: {combinations_checked}")
+        text_lines.append(f"Combinations: {combinations_checked}")
     if alert_id:
         text_lines.append(f"Alert ID: {alert_id}")
-    text_lines.append(f"Prices shown are for {passengers_label} (total).")
     text_lines.append("")
     text_lines.append("View results:")
     text_lines.append(results_url)
+    text_body = "\n".join(text_lines)
 
-    msg.set_content("\n".join(text_lines))
+    # HTML
+    passengers_label = f"{passengers} passenger" if passengers == 1 else f"{passengers} passengers"
 
     html = f"""
     <html>
@@ -676,12 +684,12 @@ def send_alert_confirmation_email(alert) -> None:
               Your alert is active
             </div>
 
-            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 14px 0;">
+            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 10px 0;">
               We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
             </div>
 
-            <div style="font-size:12px;color:#6b7280;margin:0 0 18px 0;">
-              Prices shown are for {passengers_label} (total).
+            <div style="font-size:13px;color:#6b7280;margin:0 0 16px 0;">
+              Prices shown are the total for all passengers.
             </div>
 
             <div style="margin:0 0 18px 0;">
@@ -745,23 +753,21 @@ def send_alert_confirmation_email(alert) -> None:
     </html>
     """
 
-    msg.add_alternative(html, subtype="html")
-
     try:
-        _send_email_message(msg)
+        send_email(to_email=to_email, subject=subject, text_body=text_body, html_body=html)
     except Exception:
         pass
 
-# =====================================
-# END SECTION: ALERT CONFIRMATION EMAIL
-# =====================================
+# =======================================
+# SECTION END: ALERT CONFIRMATION EMAIL
+# =======================================
 
 
 # =======================================
-# START SECTION: EARLY ACCESS WELCOME EMAIL
+# SECTION START: EARLY ACCESS WELCOME EMAIL
 # =======================================
 
-def send_early_access_welcome_email(to_email: str):
+def send_early_access_welcome_email(to_email: str) -> None:
     subject = "Welcome aboard Flyyv"
     body = (
         "Hi there,\n\n"
@@ -774,12 +780,8 @@ def send_early_access_welcome_email(to_email: str):
         "Founder, Flyyv"
     )
 
-    send_single_email(
-        to_email=to_email,
-        subject=subject,
-        body=body,
-    )
+    send_email(to_email=to_email, subject=subject, text_body=body, html_body=None)
 
-# =====================================
-# END SECTION: EARLY ACCESS WELCOME EMAIL
-# =====================================
+# =======================================
+# SECTION END: EARLY ACCESS WELCOME EMAIL
+# =======================================
