@@ -2153,30 +2153,49 @@ def get_alerts(
 
         alerts = query.order_by(Alert.created_at.desc()).all()
 
-        return [
-            AlertOut(
-                id=a.id,
-                email=a.user_email,
-                origin=a.origin,
-                destination=a.destination,
-                cabin=a.cabin,
-                search_mode=a.search_mode,
-                departure_start=a.departure_start,
-                departure_end=a.departure_end,
-                return_start=a.return_start,
-                return_end=a.return_end,
-                alert_type=a.alert_type,
-                max_price=a.max_price,
-                mode=a.mode,
-                passengers=_derive_alert_passengers(a),
-                times_sent=a.times_sent,
-                is_active=a.is_active,
-                last_price=a.last_price,
-                created_at=a.created_at,
-                updated_at=a.updated_at,
-            )
-            for a in alerts
-        ]
+        result = []
+
+for a in alerts:
+    best_run = (
+        db.query(AlertRun)
+        .filter(AlertRun.alert_id == a.id)
+        .filter(AlertRun.price_found.isnot(None))
+        .order_by(AlertRun.price_found.asc())
+        .first()
+    )
+
+    best_price = best_run.price_found if best_run else None
+
+    result.append(
+        AlertOut(
+            id=a.id,
+            email=a.user_email,
+            origin=a.origin,
+            destination=a.destination,
+            cabin=a.cabin,
+            search_mode=a.search_mode,
+            departure_start=a.departure_start,
+            departure_end=a.departure_end,
+            return_start=a.return_start,
+            return_end=a.return_end,
+            alert_type=a.alert_type,
+            max_price=a.max_price,
+            mode=a.mode,
+            passengers=_derive_alert_passengers(a),
+            times_sent=a.times_sent,
+            is_active=a.is_active,
+            last_price=a.last_price,
+            best_price=best_price,
+            last_run_at=a.last_run_at,
+            last_notified_at=a.last_notified_at,
+            last_notified_price=a.last_notified_price,
+            created_at=a.created_at,
+            updated_at=a.updated_at,
+        )
+    )
+
+return result
+
     finally:
         db.close()
 
