@@ -1597,15 +1597,20 @@ def process_alert(alert: Alert, db: Session) -> None:
         sent=sent_flag,
         reason=send_reason,
     )
+    
     db.add(run_row)
 
     alert.last_price = current_price
     alert.last_run_at = now
     alert.updated_at = now
-    if sent_flag:
-        alert.times_sent = (alert.times_sent or 0) + 1
+
+   if sent_flag:
+    alert.times_sent = (alert.times_sent or 0) + 1
+    alert.last_notified_at = now
+    alert.last_notified_price = current_price
 
     db.commit()
+
 
 
 def run_all_alerts_cycle() -> None:
