@@ -2039,27 +2039,14 @@ def create_alert(payload: AlertCreate):
 
         search_mode_value = (payload.search_mode or "flexible").strip().lower()
         if search_mode_value not in ("flexible", "fixed"):
-            raise HTTPException(status_code=400, detail="Invalid search_mode, expected 'flexible' or 'fixed'")
+            raise HTTPException(status_code=400, detail="Invalid search_mode")
 
         mode_value = (payload.mode or "").strip().lower()
         if search_mode_value == "flexible":
             mode_value = "smart"
-        else:
-            if mode_value not in ("smart", "single"):
-                mode_value = "single"
+        elif mode_value not in ("smart", "single"):
+            mode_value = "single"
 
-            if (
-                payload.mode == "smart"
-                or (
-                    search_mode_value == "fixed"
-                    and payload.departure_start
-                    and payload.departure_end
-                    and payload.return_start
-                )
-            ):
-                mode_value = "smart"
-
-        # passenger validation
         max_passengers = get_config_int("MAX_PASSENGERS", 4)
         pax = max(1, int(payload.passengers or 1))
         if pax > max_passengers:
@@ -2087,9 +2074,8 @@ def create_alert(payload: AlertCreate):
             updated_at=now,
         )
 
-        # Backwards compatible: only set if DB model supports it
         if hasattr(alert, "passengers"):
-            setattr(alert, "passengers", pax)
+            alert.passengers = pax
 
         db.add(alert)
         db.commit()
@@ -2118,6 +2104,10 @@ def create_alert(payload: AlertCreate):
             times_sent=alert.times_sent,
             is_active=alert.is_active,
             last_price=alert.last_price,
+            best_price=None,
+            last_run_at=alert.last_run_at,
+            last_notified_at=None,
+            last_notified_price=None,
             created_at=alert.created_at,
             updated_at=alert.updated_at,
         )
@@ -2131,71 +2121,67 @@ def get_alerts(
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     include_inactive: bool = False,
 ):
-    resolved_email: Optional[str] = None
     db = SessionLocal()
     try:
-        if email is not None:
+        resolved_email: Optional[str] = None
+
+        if email:
             resolved_email = email
         elif x_user_id:
             app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user and app_user.email:
+            if app_user:
                 resolved_email = app_user.email
 
         if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
+            raise HTTPException(status_code=400, detail="Email required")
 
         query = db.query(Alert).filter(Alert.user_email == resolved_email)
         if not include_inactive:
-            query = query.filter(Alert.is_active == True)  # noqa: E712
+            query = query.filter(Alert.is_active == True)  # noqa
 
         alerts = query.order_by(Alert.created_at.desc()).all()
+        result: List[AlertOut] = []
 
-        result = []
+        for a in alerts:
+            best_run = (
+                db.query(AlertRun)
+                .filter(AlertRun.alert_id == a.id)
+                .filter(AlertRun.price_found.isnot(None))
+                .order_by(AlertRun.price_found.asc())
+                .first()
+            )
 
-for a in alerts:
-    best_run = (
-        db.query(AlertRun)
-        .filter(AlertRun.alert_id == a.id)
-        .filter(AlertRun.price_found.isnot(None))
-        .order_by(AlertRun.price_found.asc())
-        .first()
-    )
+            best_price = best_run.price_found if best_run else None
 
-    best_price = best_run.price_found if best_run else None
+            result.append(
+                AlertOut(
+                    id=a.id,
+                    email=a.user_email,
+                    origin=a.origin,
+                    destination=a.destination,
+                    cabin=a.cabin,
+                    search_mode=a.search_mode,
+                    departure_start=a.departure_start,
+                    departure_end=a.departure_end,
+                    return_start=a.return_start,
+                    return_end=a.return_end,
+                    alert_type=a.alert_type,
+                    max_price=a.max_price,
+                    mode=a.mode,
+                    passengers=_derive_alert_passengers(a),
+                    times_sent=a.times_sent,
+                    is_active=a.is_active,
+                    last_price=a.last_price,
+                    best_price=best_price,
+                    last_run_at=a.last_run_at,
+                    last_notified_at=a.last_notified_at,
+                    last_notified_price=a.last_notified_price,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                )
+            )
 
-    result.append(
-        AlertOut(
-            id=a.id,
-            email=a.user_email,
-            origin=a.origin,
-            destination=a.destination,
-            cabin=a.cabin,
-            search_mode=a.search_mode,
-            departure_start=a.departure_start,
-            departure_end=a.departure_end,
-            return_start=a.return_start,
-            return_end=a.return_end,
-            alert_type=a.alert_type,
-            max_price=a.max_price,
-            mode=a.mode,
-            passengers=_derive_alert_passengers(a),
-            times_sent=a.times_sent,
-            is_active=a.is_active,
-            last_price=a.last_price,
-            best_price=best_price,
-            last_run_at=a.last_run_at,
-            last_notified_at=a.last_notified_at,
-            last_notified_price=a.last_notified_price,
-            created_at=a.created_at,
-            updated_at=a.updated_at,
-        )
-    )
-
-return result
-
+        return result
     finally:
         db.close()
 
@@ -2209,136 +2195,46 @@ def update_alert(
 ):
     db = SessionLocal()
     try:
-        resolved_email: Optional[str] = None
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
+        resolved_email = email
+        if not resolved_email and x_user_id:
             app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user and app_user.email:
+            if app_user:
                 resolved_email = app_user.email
 
         if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
+            raise HTTPException(status_code=400, detail="Email required")
 
         alert = (
             db.query(Alert)
-            .filter(Alert.id == alert_id)
-            .filter(Alert.user_email == resolved_email)
+            .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
             .first()
         )
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
-        if payload.alert_type is not None:
-            alert.alert_type = payload.alert_type
-        if payload.max_price is not None:
-            alert.max_price = payload.max_price
-        if payload.is_active is not None:
-            alert.is_active = payload.is_active
-        if payload.departure_start is not None:
-            alert.departure_start = payload.departure_start
-        if payload.departure_end is not None:
-            alert.departure_end = payload.departure_end
-        if payload.return_start is not None:
-            alert.return_start = payload.return_start
-        if payload.return_end is not None:
-            alert.return_end = payload.return_end
+        for field in (
+            "alert_type",
+            "max_price",
+            "departure_start",
+            "departure_end",
+            "return_start",
+            "return_end",
+            "mode",
+            "is_active",
+        ):
+            val = getattr(payload, field, None)
+            if val is not None:
+                setattr(alert, field, val)
 
-        if payload.mode is not None:
-            if payload.mode not in ("single", "smart"):
-                raise HTTPException(status_code=400, detail="Invalid alert mode, expected 'single' or 'smart'")
-            alert.mode = payload.mode
-
-        incoming_pax = payload.passengers
-        if incoming_pax is None:
-            incoming_pax = payload.number_of_passengers
-        if incoming_pax is not None:
+        if payload.passengers:
             max_passengers = get_config_int("MAX_PASSENGERS", 4)
-            pax = max(1, int(incoming_pax))
-            if pax > max_passengers:
-                pax = max_passengers
-            if hasattr(alert, "passengers"):
-                setattr(alert, "passengers", pax)
+            alert.passengers = min(max(1, payload.passengers), max_passengers)
 
         alert.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(alert)
 
-        return {
-            "status": "ok",
-            "alert": AlertOut(
-                id=alert.id,
-                email=alert.user_email,
-                origin=alert.origin,
-                destination=alert.destination,
-                cabin=alert.cabin,
-                search_mode=alert.search_mode,
-                departure_start=alert.departure_start,
-                departure_end=alert.departure_end,
-                return_start=alert.return_start,
-                return_end=alert.return_end,
-                alert_type=alert.alert_type,
-                max_price=alert.max_price,
-                mode=alert.mode,
-                passengers=_derive_alert_passengers(alert),
-                times_sent=alert.times_sent,
-                is_active=alert.is_active,
-                last_price=alert.last_price,
-                created_at=alert.created_at,
-                updated_at=alert.updated_at,
-            ),
-        }
-    finally:
-        db.close()
-
-
-@app.patch("/alerts/{alert_id}/status")
-def update_alert_status(
-    alert_id: str,
-    payload: AlertStatusPayload,
-    email: Optional[str] = None,
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-):
-    db = SessionLocal()
-    try:
-        incoming_is_active = payload.is_active
-        if incoming_is_active is None:
-            incoming_is_active = payload.isActive
-        if incoming_is_active is None:
-            raise HTTPException(status_code=400, detail="is_active is required in body as is_active or isActive")
-
-        resolved_email: Optional[str] = None
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
-            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user and app_user.email:
-                resolved_email = app_user.email
-
-        if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
-
-        alert = (
-            db.query(Alert)
-            .filter(Alert.id == alert_id)
-            .filter(Alert.user_email == resolved_email)
-            .first()
-        )
-        if not alert:
-            raise HTTPException(status_code=404, detail="Alert not found")
-
-        alert.is_active = incoming_is_active
-        alert.updated_at = datetime.utcnow()
-        db.commit()
-        db.refresh(alert)
-
-        return {"status": "ok", "id": alert.id, "is_active": alert.is_active}
+        return {"status": "ok"}
     finally:
         db.close()
 
@@ -2355,18 +2251,16 @@ def delete_alert(
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
-        resolved_email: Optional[str] = None
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
+        resolved_email = email
+        if not resolved_email and x_user_id:
             app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user and app_user.email:
+            if app_user:
                 resolved_email = app_user.email
 
         if resolved_email and alert.user_email != resolved_email:
-            raise HTTPException(status_code=403, detail="Alert does not belong to this user")
+            raise HTTPException(status_code=403, detail="Forbidden")
 
-        db.query(AlertRun).filter(AlertRun.alert_id == alert.id).delete(synchronize_session=False)
+        db.query(AlertRun).filter(AlertRun.alert_id == alert.id).delete()
         db.delete(alert)
         db.commit()
 
