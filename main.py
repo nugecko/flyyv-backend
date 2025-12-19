@@ -2764,8 +2764,9 @@ def create_alert(payload: AlertCreate):
                     and payload.return_start
                 )
             ):
-                mode_value = "smart
-
+                mode_value = "smart"
+        # End decide search_mode and derive mode
+        
         alert = Alert(
             id=alert_id,
             user_email=payload.email,
