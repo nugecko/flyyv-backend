@@ -111,6 +111,11 @@ class Alert(Base):
     
     last_price = Column(Integer, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
+
+    # Email notification tracking
+    last_notified_at = Column(DateTime, nullable=True)
+    last_notified_price = Column(Integer, nullable=True)
+
     times_sent = Column(Integer, nullable=False, default=0)
 
     is_active = Column(Boolean, nullable=False, default=True)
