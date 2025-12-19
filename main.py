@@ -1436,7 +1436,6 @@ def run_price_watch() -> Dict[str, Any]:
 # SECTION END: PRICE WATCH HELPERS
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: ALERT ENGINE HELPERS
 # =====================================================================
@@ -1495,57 +1494,46 @@ def process_alert(alert: Alert, db: Session) -> None:
     user = db.query(AppUser).filter(AppUser.email == alert.user_email).first()
 
     if not user:
-        run_row = AlertRun(
+        db.add(AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
             run_at=now,
             price_found=None,
             sent=False,
             reason="no_user_for_alert",
-        )
-        db.add(run_row)
+        ))
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
         return
 
     if not should_send_alert(db, user):
-        run_row = AlertRun(
+        db.add(AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
             run_at=now,
             price_found=None,
             sent=False,
             reason="alerts_disabled",
-        )
-        db.add(run_row)
+        ))
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
         return
 
     params = build_search_params_for_alert(alert)
-    max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
-
-    print(
-        f"[alerts] process_alert SEARCH id={alert.id} "
-        f"origin={params.origin} dest={params.destination} "
-        f"dep_window={params.earliestDeparture}..{params.latestDeparture} "
-        f"mode={alert.mode} pax={params.passengers} caps={max_pairs}/{max_offers_total}"
-    )
 
     options = run_duffel_scan(params)
 
     if not options:
-        run_row = AlertRun(
+        db.add(AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
             run_at=now,
             price_found=None,
             sent=False,
             reason="no_results",
-        )
-        db.add(run_row)
+        ))
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
@@ -1559,21 +1547,15 @@ def process_alert(alert: Alert, db: Session) -> None:
     send_reason = None
 
     if alert.alert_type == "price_change":
-        if alert.last_price is None:
-            should_send = True
-            send_reason = "initial"
-        elif current_price != alert.last_price:
+        if alert.last_price is None or current_price != alert.last_price:
             should_send = True
             send_reason = "price_change"
-        else:
-            should_send = False
-            send_reason = "no_change"
     elif alert.alert_type == "scheduled_3x":
         should_send = True
         send_reason = "scheduled"
     else:
         should_send = True
-        send_reason = f"unknown_type_{alert.alert_type}"
+        send_reason = "fallback"
 
     sent_flag = False
 
@@ -1587,29 +1569,28 @@ def process_alert(alert: Alert, db: Session) -> None:
         except Exception as e:
             print(f"[alerts] Failed to send email for alert {alert.id}: {e}")
             sent_flag = False
-            send_reason = (send_reason or "send_attempt") + "_email_failed"
+            send_reason = "email_failed"
 
-    run_row = AlertRun(
-    id=str(uuid4()),
-    alert_id=alert.id,
-    run_at=now,
-    price_found=current_price,
-    sent=sent_flag,
-    reason=send_reason,
-)
+    db.add(AlertRun(
+        id=str(uuid4()),
+        alert_id=alert.id,
+        run_at=now,
+        price_found=current_price,
+        sent=sent_flag,
+        reason=send_reason,
+    ))
 
-db.add(run_row)
+    alert.last_price = current_price
+    alert.last_run_at = now
+    alert.updated_at = now
 
-alert.last_price = current_price
-alert.last_run_at = now
-alert.updated_at = now
+    if sent_flag:
+        alert.times_sent = (alert.times_sent or 0) + 1
+        alert.last_notified_at = now
+        alert.last_notified_price = current_price
 
-if sent_flag:
-    alert.times_sent = (alert.times_sent or 0) + 1
-    alert.last_notified_at = now
-    alert.last_notified_price = current_price
+    db.commit()
 
-db.commit()
 
 def run_all_alerts_cycle() -> None:
     if not master_alerts_enabled():
@@ -1644,7 +1625,6 @@ def run_all_alerts_cycle() -> None:
 # =====================================================================
 # SECTION END: ALERT ENGINE HELPERS
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: EMAIL HELPERS
