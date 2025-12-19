@@ -363,7 +363,18 @@ class AlertOut(AlertBase):
     id: str
     times_sent: int
     is_active: bool
+
+    # Last observed price from the most recent check (per passenger)
     last_price: Optional[int] = None
+
+    # Computed from AlertRun history (min price_found)
+    best_price: Optional[int] = None
+
+    # Timestamps for UI status fields
+    last_run_at: Optional[datetime] = None
+    last_notified_at: Optional[datetime] = None
+    last_notified_price: Optional[int] = None
+
     created_at: datetime
     updated_at: datetime
 
