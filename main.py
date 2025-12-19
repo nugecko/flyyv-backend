@@ -1590,28 +1590,26 @@ def process_alert(alert: Alert, db: Session) -> None:
             send_reason = (send_reason or "send_attempt") + "_email_failed"
 
     run_row = AlertRun(
-        id=str(uuid4()),
-        alert_id=alert.id,
-        run_at=now,
-        price_found=current_price,
-        sent=sent_flag,
-        reason=send_reason,
-    )
-    
-    db.add(run_row)
+    id=str(uuid4()),
+    alert_id=alert.id,
+    run_at=now,
+    price_found=current_price,
+    sent=sent_flag,
+    reason=send_reason,
+)
 
-    alert.last_price = current_price
-    alert.last_run_at = now
-    alert.updated_at = now
+db.add(run_row)
 
-   if sent_flag:
+alert.last_price = current_price
+alert.last_run_at = now
+alert.updated_at = now
+
+if sent_flag:
     alert.times_sent = (alert.times_sent or 0) + 1
     alert.last_notified_at = now
     alert.last_notified_price = current_price
 
-    db.commit()
-
-
+db.commit()
 
 def run_all_alerts_cycle() -> None:
     if not master_alerts_enabled():
