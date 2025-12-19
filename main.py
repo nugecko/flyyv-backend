@@ -461,19 +461,20 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple
         return pairs[:max_pairs]
 
     stays = list(range(min_stay, max_stay + 1))
-    current = params.earliestDeparture
 
-    while current <= params.latestDeparture and len(pairs) < max_pairs:
-        for stay in stays:
+    # Interleave stays across departure dates so caps do not lock onto the first departure date
+    for stay in stays:
+        current = params.earliestDeparture
+        while current <= params.latestDeparture and len(pairs) < max_pairs:
             ret = current + timedelta(days=stay)
             if ret <= params.latestDeparture:
                 pairs.append((current, ret))
-                if len(pairs) >= max_pairs:
-                    break
-        current += timedelta(days=1)
+            current += timedelta(days=1)
+
+        if len(pairs) >= max_pairs:
+            break
 
     return pairs
-
 
 def duffel_create_offer_request(
     slices: List[dict],
