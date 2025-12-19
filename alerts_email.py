@@ -461,6 +461,9 @@ def send_alert_confirmation_email(alert) -> None:
     if not to_email:
         return
 
+    passengers = int(getattr(alert, "passengers", 1) or 1)
+    passengers_label = f"{passengers} passenger" if passengers == 1 else f"{passengers} passengers"
+
     origin = getattr(alert, "origin", "")
     destination = getattr(alert, "destination", "")
     cabin = getattr(alert, "cabin", "BUSINESS")
@@ -494,12 +497,43 @@ def send_alert_confirmation_email(alert) -> None:
     except Exception:
         trip_length_label = "Flexible"
 
-    combinations_checked = None
+        combinations_checked = None
     try:
         if is_flex and departure_start and departure_end:
-            combinations_checked = (departure_end - departure_start).days + 1
-            if combinations_checked < 1:
-                combinations_checked = None
+            window_days = (departure_end - departure_start).days + 1
+            if window_days > 0:
+                # Derive stays from alert, fallback to nights if that is what you store
+                min_stay = getattr(alert, "minStayDays", None) or getattr(alert, "min_stay_days", None)
+                max_stay = getattr(alert, "maxStayDays", None) or getattr(alert, "max_stay_days", None)
+
+                if min_stay is None or max_stay is None:
+                    # Fallback to fixed nights derived from stored dates
+                    if departure_start and return_start:
+                        n = max(1, (return_start - departure_start).days)
+                        min_stay = n
+                        max_stay = n
+                    else:
+                        min_stay = 1
+                        max_stay = 1
+
+                min_stay = max(1, int(min_stay))
+                max_stay = max(min_stay, int(max_stay))
+
+                # Theoretical combos, matching generate_date_pairs rule ret <= departure_end
+                theoretical = 0
+                for stay in range(min_stay, max_stay + 1):
+                    theoretical += max(0, window_days - stay)
+
+                # Apply the same caps your scan applies
+                cap_a = get_config_int("MAX_DATE_PAIRS", 60)
+                cap_b = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
+                hard_cap = globals().get("MAX_DATE_PAIRS_HARD", 60)
+
+                max_pairs = max(1, min(cap_a, hard_cap))
+                if cap_b:
+                    max_pairs = min(max_pairs, cap_b)
+
+                combinations_checked = min(theoretical, max_pairs) if theoretical > 0 else None
     except Exception:
         combinations_checked = None
 
@@ -534,6 +568,7 @@ def send_alert_confirmation_email(alert) -> None:
         "Your alert is active.\n\n"
         f"Route: {origin} \u2192 {destination}\n"
         f"Cabin: {cabin}\n"
+        f"Passengers: {passengers_label}\n"
         f"Departure window: {dep_window_label}\n"
         f"Trip length: {trip_length_label}\n"
         + (f"Combinations checked: {combinations_checked}\n" if combinations_checked else "")
@@ -544,79 +579,86 @@ def send_alert_confirmation_email(alert) -> None:
     msg.set_content(text_body)
 
     html = f"""
-    <html>
-      <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
-        <div style="max-width:680px;margin:0 auto;padding:24px;">
-          <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
-            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{email_type_label}</div>
+<html>
+  <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:680px;margin:0 auto;padding:24px;">
+      <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
+        <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{email_type_label}</div>
 
-            <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
-              Your alert is active
-            </div>
-
-            <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 16px 0;">
-              We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
-            </div>
-
-            <div style="margin:0 0 18px 0;">
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {origin} \u2192 {destination}
-              </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;margin-bottom:8px;">
-                {cabin}
-              </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {pill_type_label}
-              </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {dep_window_label}
-              </span>
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {trip_length_label}
-              </span>
-              {f'''
-              <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
-                {combinations_checked} combinations
-              </span>
-              ''' if combinations_checked else ''}
-            </div>
-
-            {f'''
-            <div style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">
-              Alert ID: {alert_id}
-            </div>
-            ''' if alert_id else ''}
-
-            <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
-              <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
-              <ul style="margin:0;padding-left:18px;color:#111827;font-size:15px;line-height:1.6;">
-                <li>Scan your selected window for standout prices</li>
-                <li>Notify you when we see meaningful drops or strong value</li>
-                <li>Let you jump straight back into your results anytime</li>
-              </ul>
-            </div>
-
-            <div style="margin:0 0 18px 0;">
-              <a href="{results_url}"
-                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
-                View results
-              </a>
-            </div>
-
-            <div style="font-size:12px;color:#6b7280;line-height:1.4;">
-              You are receiving this email because you created a {email_type_label}.
-            </div>
-          </div>
-
-          <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
-            Flyyv, <a href="{results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
-          </div>
+        <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
+          Your alert is active
         </div>
-      </body>
-    </html>
-    """
 
-    msg.add_alternative(html, subtype="html")
+        <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 16px 0;">
+          We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
+        </div>
+
+        <div style="margin:0 0 18px 0;">
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+            {origin} \u2192 {destination}
+          </span>
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;margin-bottom:8px;">
+            {cabin}
+          </span>
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+            {passengers_label}
+          </span>
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+            {pill_type_label}
+          </span>
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+            {dep_window_label}
+          </span>
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
+            {trip_length_label}
+          </span>
+          {f'''
+          <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
+            {combinations_checked} combinations
+          </span>
+          ''' if combinations_checked else ''}
+        </div>
+
+        <div style="font-size:12px;color:#6b7280;margin:0 0 16px 0;">
+          Prices are shown for {passengers_label} (total).
+        </div>
+
+        {f'''
+        <div style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">
+          Alert ID: {alert_id}
+        </div>
+        ''' if alert_id else ''}
+
+        <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
+          <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
+          <ul style="margin:0;padding-left:18px;color:#111827;font-size:15px;line-height:1.6;">
+            <li>Scan your selected window for standout prices</li>
+            <li>Notify you when we see meaningful drops or strong value</li>
+            <li>Let you jump straight back into your results anytime</li>
+          </ul>
+        </div>
+
+        <div style="margin:0 0 18px 0;">
+          <a href="{results_url}"
+             style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
+            View results
+          </a>
+        </div>
+
+        <div style="font-size:12px;color:#6b7280;line-height:1.4;">
+          You are receiving this email because you created a {email_type_label}.
+        </div>
+      </div>
+
+      <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
+        Flyyv, <a href="{results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
+      </div>
+    </div>
+  </body>
+</html>
+"""
+
+msg.add_alternative(html, subtype="html")
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
