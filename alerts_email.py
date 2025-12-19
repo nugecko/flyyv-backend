@@ -369,8 +369,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     nights_val = _compute_trip_nights(alert)
     nights_text = str(nights_val) if nights_val else None
 
-    scanned_combinations = len(pairs_summary)
-    theoretical_combinations = _compute_theoretical_combinations(alert)
+    analysed_combinations = len(pairs_summary)
 
     best_price_overall = None
     if pairs_summary:
@@ -380,11 +379,11 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             best_price_overall = None
 
     if best_price_overall is not None:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} from £{best_price_overall}"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} from £{best_price_overall} per passenger"
     elif threshold is not None and any_under:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} fares under £{int(threshold)}"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(threshold)} per passenger"
     else:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} update"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} update"
 
     top_pairs = [p for p in pairs_summary if p.get("cheapestPrice") is not None]
     top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
@@ -399,19 +398,16 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     # Plain text fallback
     lines: List[str] = []
     lines.append("FlyyvFlex Smart Search Alert")
-    lines.append(f"Route: {origin} \u2192 {destination}, {str(cabin).title()} class")
+    lines.append(f"Route: {origin} → {destination}, {str(cabin).title()} class")
     lines.append(f"Passengers: {passengers}")
-    lines.append(_price_basis_line(passengers))
+    lines.append("Prices shown are per passenger")
     if nights_text:
         lines.append(f"Trip length: {nights_text} nights")
-    lines.append(f"Date window: {start_label} to {end_label}")
-
-    if theoretical_combinations is not None:
-        lines.append(f"Combinations in your window: {theoretical_combinations}")
-    lines.append(f"Combinations scanned this run: {scanned_combinations}")
+    lines.append(f"Date window scanned: {start_label} to {end_label}")
+    lines.append(f"Date combinations analysed: {analysed_combinations}")
 
     if best_price_overall is not None:
-        lines.append(f"Best price found: £{best_price_overall}")
+        lines.append(f"Best price found: £{best_price_overall} per passenger")
 
     lines.append("")
     lines.append("Top 5 cheapest date combinations:")
@@ -427,7 +423,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             ret_label = ret_dt.strftime("%d %b %Y")
             price_label = int(p["cheapestPrice"])
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
-            lines.append(f"£{price_label} | {dep_label} to {ret_label} | {airline_label}")
+            lines.append(f"£{price_label} per passenger | {dep_label} to {ret_label} | {airline_label}")
             lines.append(f"View flight: {p.get('flyyvLink')}")
             lines.append("")
 
@@ -460,18 +456,19 @@ def send_smart_alert_email(alert, options: List, params) -> None:
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
                 <div>
                   <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:4px;">
-                    {origin} \u2192 {destination}
+                    {origin} → {destination}
                   </div>
                   <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">
                     {dep_label} to {ret_label}
                   </div>
                   <div style="font-size:13px;color:#111827;">
                     Cheapest option: <strong>{airline_label}</strong>
-                    {('<span style="color:#059669;font-weight:700;">, within your limit</span>' if within else '')}
+                    {('<span style="color:#059669;font-weight:700;">, within your target</span>' if within else '')}
                   </div>
                 </div>
-                <div style="text-align:right;min-width:120px;">
+                <div style="text-align:right;min-width:140px;">
                   <div style="font-size:18px;color:#111827;font-weight:800;">£{price_label}</div>
+                  <div style="font-size:12px;color:#6b7280;">per passenger</div>
                   <div style="margin-top:6px;">
                     <a href="{view_link}" style="font-size:13px;color:#2563eb;text-decoration:underline;font-weight:700;">
                       View flight
@@ -487,20 +484,13 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     if best_price_overall is not None:
         best_chip = f"""
         <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
-          Best £{int(best_price_overall)}
+          Best £{int(best_price_overall)} per passenger
         </span>
         """
 
-    combos_chip = ""
-    if theoretical_combinations is not None:
-        combos_chip += f"""
-        <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-          {int(theoretical_combinations)} combinations
-        </span>
-        """
-    combos_chip += f"""
+    combos_chip = f"""
     <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-      {int(scanned_combinations)} scanned
+      {int(analysed_combinations)} date combinations analysed
     </span>
     """
 
@@ -512,17 +502,17 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">FlyyvFlex Smart Search Alert</div>
 
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
-              Top deals for {origin} \u2192 {destination}
+              Top deals for {origin} → {destination}
             </div>
 
             <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
-              Based on a full scan of your <strong>{start_label} to {end_label}</strong> window
+              Based on a scan of your <strong>{start_label} to {end_label}</strong> window
               {f" for <strong>{nights_text}-night</strong> trips" if nights_text else ""}.
             </div>
 
             <div style="font-size:13px;color:#6b7280;margin:0 0 12px 0;">
               Passengers: <strong>{_passengers_label(passengers)}</strong><br>
-              {_price_basis_line(passengers)}
+              Prices shown are per passenger
             </div>
 
             <div style="margin:0 0 16px 0;">
@@ -577,7 +567,6 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 # =====================================================================
 # SECTION END: SMART ALERT SUMMARY EMAIL
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: ALERT CONFIRMATION EMAIL
