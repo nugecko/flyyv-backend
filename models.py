@@ -107,6 +107,8 @@ class Alert(Base):
     # smart  = smart search / date range based
     mode = Column(String(32), nullable=False, default="single")
 
+    passengers = Column(Integer, nullable=False, default=1)
+    
     last_price = Column(Integer, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
     times_sent = Column(Integer, nullable=False, default=0)
