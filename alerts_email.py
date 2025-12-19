@@ -196,6 +196,19 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     origin = alert.origin
     destination = alert.destination
 
+        # TEMP DEBUG: confirm incoming date pairs
+    try:
+        sample = [(getattr(o, "departureDate", None), getattr(o, "returnDate", None)) for o in options[:30]]
+        unique_deps = sorted({d for d, _ in sample if d})
+        unique_pairs = len({(d, r) for d, r in sample if d and r})
+        print(f"[SMART_EMAIL_DEBUG] options={len(options)} sample_pairs={sample[:10]}")
+        print(f"[SMART_EMAIL_DEBUG] unique_departure_dates_in_sample={len(unique_deps)} first5={unique_deps[:5]}")
+        print(f"[SMART_EMAIL_DEBUG] unique_pairs_in_sample={unique_pairs}")
+        print(f"[SMART_EMAIL_DEBUG] window={params.earliestDeparture} to {params.latestDeparture}")
+    except Exception as e:
+        print(f"[SMART_EMAIL_DEBUG] failed: {e}")
+    # TEMP DEBUG END: confirm incoming date pairs
+
     grouped: Dict[Tuple[str, str], List] = {}
     for opt in options:
         key = (opt.departureDate, opt.returnDate)
