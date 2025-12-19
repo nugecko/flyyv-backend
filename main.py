@@ -1,13 +1,16 @@
+# =====================================================================
+# SECTION START: IMPORTS
+# =====================================================================
+
 import os
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
-from collections import defaultdict
+from collections import defaultdict, Counter
 import smtplib
 from email.message import EmailMessage
-from collections import Counter
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -24,9 +27,14 @@ from alerts_email import (
     send_alert_confirmation_email,
 )
 
-# =======================================
-# SECTION: ALERT TOGGLES
-# =======================================
+# =====================================================================
+# SECTION END: IMPORTS
+# =====================================================================
+
+
+# =====================================================================
+# SECTION START: ALERT TOGGLES
+# =====================================================================
 
 def master_alerts_enabled() -> bool:
     """
@@ -42,14 +50,9 @@ def alerts_globally_enabled(db: Session) -> bool:
     Global switch stored in admin_config with key = 'GLOBAL_ALERTS'.
     If the row does not exist, default to True.
     """
-    config = (
-        db.query(AdminConfig)
-        .filter(AdminConfig.key == "GLOBAL_ALERTS")
-        .first()
-    )
+    config = db.query(AdminConfig).filter(AdminConfig.key == "GLOBAL_ALERTS").first()
     if not config:
         return True
-    # if the column is missing for any reason, also default to True
     if not hasattr(config, "alerts_enabled"):
         return True
     return bool(config.alerts_enabled)
@@ -79,9 +82,14 @@ def should_send_alert(db: Session, user: AppUser) -> bool:
         return False
     return True
 
-# =======================================
-# SECTION: AIRLINES IMPORTS
-# =======================================
+# =====================================================================
+# SECTION END: ALERT TOGGLES
+# =====================================================================
+
+
+# =====================================================================
+# SECTION START: AIRLINES IMPORTS
+# =====================================================================
 
 try:
     from airlines import AIRLINE_NAMES  # type: ignore
@@ -96,12 +104,14 @@ except ImportError:
     except ImportError:
         AIRLINE_BOOKING_URL: Dict[str, str] = {}
 
-# ===== END SECTION: AIRLINES IMPORTS =====
+# =====================================================================
+# SECTION END: AIRLINES IMPORTS
+# =====================================================================
 
 
-# =======================================
-# SECTION: ADMIN CONFIG HELPERS
-# =======================================
+# =====================================================================
+# SECTION START: ADMIN CONFIG HELPERS
+# =====================================================================
 
 def _get_config_row(db: Session, key: str) -> Optional[AdminConfig]:
     return db.query(AdminConfig).filter(AdminConfig.key == key).first()
@@ -153,12 +163,14 @@ def get_config_bool(key: str, default_value: bool) -> bool:
         return False
     return default_value
 
-# ===== END SECTION: ADMIN CONFIG HELPERS =====
+# =====================================================================
+# SECTION END: ADMIN CONFIG HELPERS
+# =====================================================================
 
 
-# =======================================
-# SECTION: Pydantic MODELS
-# =======================================
+# =====================================================================
+# SECTION START: Pydantic MODELS
+# =====================================================================
 
 class SearchParams(BaseModel):
     origin: str
@@ -308,8 +320,11 @@ class AlertUpdatePayload(BaseModel):
     departure_end: Optional[date] = None
     return_start: Optional[date] = None
     return_end: Optional[date] = None
-    # We will later use this to migrate alerts between single and smart
     mode: Optional[str] = None
+
+    # NEW: allow updates for passengers (safe, defaults handled)
+    passengers: Optional[int] = None
+    number_of_passengers: Optional[int] = None
 
 
 class AlertStatusPayload(BaseModel):
@@ -336,6 +351,9 @@ class AlertBase(BaseModel):
     # smart  = smart search / date window
     mode: Optional[str] = "single"
 
+    # NEW: passengers on alert
+    passengers: int = 1
+
 
 class AlertCreate(AlertBase):
     pass
@@ -352,13 +370,14 @@ class AlertOut(AlertBase):
     class Config:
         orm_mode = True
 
-# ===== END SECTION: Pydantic MODELS =====
+# =====================================================================
+# SECTION END: Pydantic MODELS
+# =====================================================================
 
 
-
-# =======================================
-# SECTION: FastAPI APP AND CORS
-# =======================================
+# =====================================================================
+# SECTION START: FastAPI APP AND CORS
+# =====================================================================
 
 app = FastAPI()
 
@@ -374,18 +393,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =======================================
-# SECTION: ROUTER INCLUDES
-# =======================================
-
 from early_access import router as early_access_router
 app.include_router(early_access_router)
 
-# ===== END SECTION: FastAPI APP AND CORS =====
+# =====================================================================
+# SECTION END: FastAPI APP AND CORS
+# =====================================================================
 
-# =======================================
-# SECTION: ENV, DUFFEL AND EMAIL CONFIG
-# =======================================
+
+# =====================================================================
+# SECTION START: ENV, DUFFEL AND EMAIL CONFIG
+# =====================================================================
 
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
 
@@ -421,23 +439,27 @@ WATCH_MAX_PRICE = float(os.getenv("WATCH_MAX_PRICE", "720"))
 
 ALERTS_ENABLED = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
 
-# ===== END SECTION: ENV, DUFFEL AND EMAIL CONFIG =====
+# =====================================================================
+# SECTION END: ENV, DUFFEL AND EMAIL CONFIG
+# =====================================================================
 
 
-# =======================================
-# SECTION: IN MEMORY STORES
-# =======================================
+# =====================================================================
+# SECTION START: IN MEMORY STORES
+# =====================================================================
 
 USER_WALLETS: Dict[str, int] = {}
 JOBS: Dict[str, SearchJob] = {}
 JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 
-# ===== END SECTION: IN MEMORY STORES =====
+# =====================================================================
+# SECTION END: IN MEMORY STORES
+# =====================================================================
 
 
-# =======================================
-# SECTION: DUFFEL HELPERS
-# =======================================
+# =====================================================================
+# SECTION START: DUFFEL HELPERS
+# =====================================================================
 
 def duffel_headers() -> dict:
     return {
@@ -462,7 +484,6 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple
 
     stays = list(range(min_stay, max_stay + 1))
 
-    # Interleave stays across departure dates so caps do not lock onto the first departure date
     for stay in stays:
         current = params.earliestDeparture
         while current <= params.latestDeparture and len(pairs) < max_pairs:
@@ -475,6 +496,7 @@ def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple
             break
 
     return pairs
+
 
 def duffel_create_offer_request(
     slices: List[dict],
@@ -708,12 +730,14 @@ def map_duffel_offer_to_option(
         url=booking_url,
     )
 
-# ===== END SECTION: DUFFEL HELPERS =====
+# =====================================================================
+# SECTION END: DUFFEL HELPERS
+# =====================================================================
 
 
-# =======================================
-# SECTION: FILTERING AND BALANCING
-# =======================================
+# =====================================================================
+# SECTION START: FILTERING AND BALANCING
+# =====================================================================
 
 def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
     filtered = list(options)
@@ -728,7 +752,6 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
         else:
             filtered = [o for o in filtered if o.stops in allowed]
 
-    # Sort by number of stops first (direct flights first), then by price
     filtered.sort(key=lambda o: (o.stops, o.price))
     return filtered
 
@@ -737,24 +760,16 @@ def balance_airlines(
     options: List[FlightOption],
     max_total: Optional[int] = None,
 ) -> List[FlightOption]:
-    """
-    Balance offers across airlines:
-    1) Ensure each airline that appears gets at least one slot where possible
-    2) Then fill remaining slots by overall best price, respecting a per airline cap
-    """
     if not options:
         return []
 
-    # Always start from cheapest to most expensive
     sorted_by_price = sorted(options, key=lambda x: x.price)
 
-    # Resolve total cap
     if max_total is None or max_total <= 0:
         max_total = len(sorted_by_price)
 
     actual_total = min(max_total, len(sorted_by_price))
 
-    # Read max share setting from admin_config, default to 40 percent
     max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 40)
     if max_share_percent <= 0 or max_share_percent > 100:
         max_share_percent = 40
@@ -762,7 +777,6 @@ def balance_airlines(
     airline_counts: Dict[str, int] = defaultdict(int)
     result: List[FlightOption] = []
 
-    # Group options by airline so we can easily pick the cheapest per airline
     airline_buckets: Dict[str, List[FlightOption]] = defaultdict(list)
     for opt in sorted_by_price:
         key = opt.airlineCode or opt.airline
@@ -771,20 +785,18 @@ def balance_airlines(
     unique_airlines = list(airline_buckets.keys())
     num_airlines = max(1, len(unique_airlines))
 
-    # Compute a per airline cap based on max share and number of airlines
     base_cap = max(1, (max_share_percent * actual_total) // 100)
     per_airline_cap = max(
         base_cap,
         actual_total // num_airlines if num_airlines else base_cap,
     )
 
-    # First pass, guarantee each airline at least one slot where possible
     seen_ids = set()
     for airline_key, bucket in airline_buckets.items():
         if len(result) >= actual_total:
             break
 
-        cheapest_opt = bucket[0]  # bucket is already sorted by price because base list was sorted
+        cheapest_opt = bucket[0]
         if cheapest_opt is None:
             continue
 
@@ -792,7 +804,6 @@ def balance_airlines(
         result.append(cheapest_opt)
         seen_ids.add(id(cheapest_opt))
 
-    # Second pass, fill remaining slots by overall best price, respecting per airline cap
     for opt in sorted_by_price:
         if len(result) >= actual_total:
             break
@@ -808,15 +819,17 @@ def balance_airlines(
         result.append(opt)
         seen_ids.add(id(opt))
 
-    # Final sort by price for consistent ordering
     result.sort(key=lambda x: x.price)
     return result
 
-# ===== END SECTION: FILTERING AND BALANCING =====
+# =====================================================================
+# SECTION END: FILTERING AND BALANCING
+# =====================================================================
 
-# =======================================
-# SECTION: SHARED SEARCH HELPERS
-# =======================================
+
+# =====================================================================
+# SECTION START: SHARED SEARCH HELPERS
+# =====================================================================
 
 def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
     config_max_pairs = get_config_int("MAX_DATE_PAIRS", 60)
@@ -845,20 +858,11 @@ def estimate_date_pairs(params: SearchParams) -> int:
     pairs = generate_date_pairs(params, max_pairs=max_pairs)
     return len(pairs)
 
+
 def apply_global_airline_cap(
     options: List[FlightOption],
     max_share: float = 0.5,
 ) -> List[FlightOption]:
-    """
-    Apply a global cap per airline across the final list.
-
-    Example:
-    max_share = 0.5 means no airline is allowed to have more than
-    fifty percent of all returned options.
-
-    Assumes options are already sorted by "best first"
-    (for example price or your existing score).
-    """
     if not options:
         print("[search] apply_global_airline_cap: no options, skipping")
         return options
@@ -872,7 +876,6 @@ def apply_global_airline_cap(
     for opt in options:
         airline = opt.airlineCode or opt.airline or "UNKNOWN"
         if counts[airline] >= max_per_airline:
-            # Skip this option because this airline is already at the cap
             continue
 
         capped.append(opt)
@@ -884,6 +887,8 @@ def apply_global_airline_cap(
         f"airline_counts={dict(counts)}"
     )
     return capped
+
+
 def fetch_direct_only_offers(
     origin: str,
     destination: str,
@@ -893,31 +898,17 @@ def fetch_direct_only_offers(
     cabin: str,
     per_pair_limit: int = 15,
 ) -> List[FlightOption]:
-    """
-    Make a tiny direct only Duffel call with max_connections=0
-    and return mapped FlightOption objects.
-    """
     if not DUFFEL_ACCESS_TOKEN:
         print("[direct_only] Duffel not configured")
         return []
 
-    # Build slices exactly like run_duffel_scan does
     slices = [
-        {
-            "origin": origin,
-            "destination": destination,
-            "departure_date": dep_date.isoformat(),
-        },
-        {
-            "origin": destination,
-            "destination": origin,
-            "departure_date": ret_date.isoformat(),
-        },
+        {"origin": origin, "destination": destination, "departure_date": dep_date.isoformat()},
+        {"origin": destination, "destination": origin, "departure_date": ret_date.isoformat()},
     ]
 
     pax = [{"type": "adult"} for _ in range(passengers)]
 
-    # Create the request but with max_connections=0
     url = f"{DUFFEL_API_BASE}/air/offer_requests"
     payload = {
         "data": {
@@ -944,7 +935,6 @@ def fetch_direct_only_offers(
         print("[direct_only] no offer_request_id returned")
         return []
 
-    # Now fetch offers sorted by price
     try:
         offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
     except Exception as e:
@@ -960,31 +950,21 @@ def fetch_direct_only_offers(
             print(f"[direct_only] mapping error: {e}")
 
     print(f"[direct_only] fetched {len(results)} direct offers")
-
     return results
 
+
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
-    print(
-        f"[search] run_duffel_scan START origin={params.origin} "
-        f"dest={params.destination}"
-    )
+    print(f"[search] run_duffel_scan START origin={params.origin} dest={params.destination}")
 
     max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
-    print(
-        f"[search] caps max_pairs={max_pairs} "
-        f"max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}"
-    )
+    print(f"[search] caps max_pairs={max_pairs} max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}")
 
     date_pairs = generate_date_pairs(params, max_pairs=max_pairs)
     print(f"[search] generated {len(date_pairs)} date pairs")
 
-    # Apply extra safety cap from admin_config
     max_date_pairs = get_config_int("MAX_DATE_PAIRS_PER_ALERT", 40)
     if max_date_pairs and len(date_pairs) > max_date_pairs:
-        print(
-            f"[search] capping date_pairs from {len(date_pairs)} to "
-            f"{max_date_pairs} using MAX_DATE_PAIRS_PER_ALERT"
-        )
+        print(f"[search] capping date_pairs from {len(date_pairs)} to {max_date_pairs} using MAX_DATE_PAIRS_PER_ALERT")
         date_pairs = date_pairs[:max_date_pairs]
 
     if not date_pairs:
@@ -996,28 +976,14 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
     for dep, ret in date_pairs:
         if total_count >= max_offers_total:
-            print(
-                f"[search] total_count {total_count} reached max_offers_total "
-                f"{max_offers_total}, stopping"
-            )
+            print(f"[search] total_count {total_count} reached max_offers_total {max_offers_total}, stopping")
             break
 
-        print(
-            f"[search] querying Duffel for pair dep={dep} ret={ret} "
-            f"current_total={total_count}"
-        )
+        print(f"[search] querying Duffel for pair dep={dep} ret={ret} current_total={total_count}")
 
         slices = [
-            {
-                "origin": params.origin,
-                "destination": params.destination,
-                "departure_date": dep.isoformat(),
-            },
-            {
-                "origin": params.destination,
-                "destination": params.origin,
-                "departure_date": ret.isoformat(),
-            },
+            {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
+            {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
         ]
         pax = [{"type": "adult"} for _ in range(params.passengers)]
 
@@ -1029,43 +995,27 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
                 continue
 
             per_pair_limit = min(max_offers_pair, max_offers_total - total_count)
-            print(
-                f"[search] listing offers for request_id={offer_request_id} "
-                f"per_pair_limit={per_pair_limit}"
-            )
+            print(f"[search] listing offers for request_id={offer_request_id} per_pair_limit={per_pair_limit}")
             offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
         except HTTPException as e:
-            print(
-                f"[search] Duffel HTTPException for dep={dep} ret={ret}: {e.detail}"
-            )
+            print(f"[search] Duffel HTTPException for dep={dep} ret={ret}: {e.detail}")
             continue
         except Exception as e:
             print(f"[search] Unexpected Duffel error for dep={dep} ret={ret}: {e}")
             continue
 
-        num_offers = len(offers_json)
-        print(
-            f"[search] Duffel returned {num_offers} offers for dep={dep} ret={ret}"
-        )
+        print(f"[search] Duffel returned {len(offers_json)} offers for dep={dep} ret={ret}")
 
         for offer in offers_json:
             collected_offers.append((offer, dep, ret))
             total_count += 1
             if total_count >= max_offers_total:
-                print(
-                    f"[search] reached max_offers_total={max_offers_total} "
-                    f"while collecting offers, breaking inner loop"
-                )
+                print(f"[search] reached max_offers_total={max_offers_total} while collecting offers, breaking inner loop")
                 break
 
-    print(
-        f"[search] collected total {len(collected_offers)} offers across all pairs"
-    )
-
-    # Now work per date pair instead of globally
+    print(f"[search] collected total {len(collected_offers)} offers across all pairs")
     print("[search] starting per date pair mapping, filtering and balancing")
 
-    # Bucket raw Duffel offers by date pair first
     offers_by_pair: Dict[Tuple[date, date], List[dict]] = defaultdict(list)
     for offer, dep, ret in collected_offers:
         offers_by_pair[(dep, ret)].append(offer)
@@ -1081,55 +1031,29 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
             print(f"[search] no offers to map for dep={dep} ret={ret}")
             continue
 
-        # Map to FlightOption for this specific date pair
-        mapped_pair: List[FlightOption] = [
-            map_duffel_offer_to_option(offer, dep, ret) for offer in pair_offers
-        ]
-        print(
-            f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers"
-        )
+        mapped_pair: List[FlightOption] = [map_duffel_offer_to_option(offer, dep, ret) for offer in pair_offers]
+        print(f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers")
 
-        # Apply filters per pair
         filtered_pair = apply_filters(mapped_pair, params)
-        print(
-            f"[search] pair dep={dep} ret={ret}: filtered down to {len(filtered_pair)} offers"
-        )
+        print(f"[search] pair dep={dep} ret={ret}: filtered down to {len(filtered_pair)} offers")
 
         if not filtered_pair:
             print(f"[search] pair dep={dep} ret={ret}: no offers after filters")
             continue
 
-        # Debug airline distribution before balancing for this pair
-        airline_counts_pair = Counter(
-            opt.airlineCode or opt.airline for opt in filtered_pair
-        )
-        print(
-            f"[search] airline mix before balance for dep={dep} ret={ret}: {dict(airline_counts_pair)}"
-        )
+        airline_counts_pair = Counter(opt.airlineCode or opt.airline for opt in filtered_pair)
+        print(f"[search] airline mix before balance for dep={dep} ret={ret}: {dict(airline_counts_pair)}")
 
-        # Enforce per pair cap
-        # Note: filtered_pair is already sorted by price inside apply_filters
         if len(filtered_pair) > max_offers_pair:
-            print(
-                f"[search] pair dep={dep} ret={ret}: capping offers from "
-                f"{len(filtered_pair)} to {max_offers_pair} using max_offers_pair"
-            )
+            print(f"[search] pair dep={dep} ret={ret}: capping offers from {len(filtered_pair)} to {max_offers_pair} using max_offers_pair")
             filtered_pair = filtered_pair[:max_offers_pair]
 
-        # Balance airlines within this specific date pair
         balanced_pair = balance_airlines(filtered_pair, max_total=max_offers_pair)
-        print(
-            f"[search] pair dep={dep} ret={ret}: balance_airlines returned "
-            f"{len(balanced_pair)} offers"
-        )
+        print(f"[search] pair dep={dep} ret={ret}: balance_airlines returned {len(balanced_pair)} offers")
 
-        # Respect global max_offers_total as we aggregate results
         for opt in balanced_pair:
             if total_added >= max_offers_total:
-                print(
-                    f"[search] global cap reached while adding dep={dep} ret={ret}, "
-                    f"max_offers_total={max_offers_total}"
-                )
+                print(f"[search] global cap reached while adding dep={dep} ret={ret}, max_offers_total={max_offers_total}")
                 hit_global_cap = True
                 break
             all_results.append(opt)
@@ -1138,17 +1062,17 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
         if hit_global_cap:
             break
 
-    print(
-        f"[search] run_duffel_scan DONE, returning {len(all_results)} offers "
-        f"from {len(date_pairs)} date pairs, hit_global_cap={hit_global_cap}"
-    )
+    print(f"[search] run_duffel_scan DONE, returning {len(all_results)} offers from {len(date_pairs)} date pairs, hit_global_cap={hit_global_cap}")
     return all_results
 
-# ===== END SECTION: SHARED SEARCH HELPERS =====
+# =====================================================================
+# SECTION END: SHARED SEARCH HELPERS
+# =====================================================================
 
-# =======================================
-# SECTION: ASYNC JOB RUNNER
-# =======================================
+
+# =====================================================================
+# SECTION START: ASYNC JOB RUNNER
+# =====================================================================
 
 def process_date_pair_offers(
     params: SearchParams,
@@ -1157,16 +1081,8 @@ def process_date_pair_offers(
     max_offers_pair: int,
 ) -> List[FlightOption]:
     slices = [
-        {
-            "origin": params.origin,
-            "destination": params.destination,
-            "departure_date": dep.isoformat(),
-        },
-        {
-            "origin": params.destination,
-            "destination": params.origin,
-            "departure_date": ret.isoformat(),
-        },
+        {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
+        {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
     ]
     pax = [{"type": "adult"} for _ in range(params.passengers)]
 
@@ -1185,12 +1101,8 @@ def process_date_pair_offers(
         print(f"[PAIR {dep} -> {ret}] Unexpected Duffel error: {e}")
         return []
 
-    # Map the normal mixed-connection offers
-    batch_mapped: List[FlightOption] = [
-        map_duffel_offer_to_option(offer, dep, ret) for offer in offers_json
-    ]
+    batch_mapped: List[FlightOption] = [map_duffel_offer_to_option(offer, dep, ret) for offer in offers_json]
 
-    # Fetch a small set of direct-only offers for this pair
     try:
         direct_options = fetch_direct_only_offers(
             origin=params.origin,
@@ -1206,7 +1118,6 @@ def process_date_pair_offers(
         direct_options = []
 
     if direct_options:
-        # Build a simple de-dup key so we do not add exact duplicates
         seen = set()
         for opt in batch_mapped:
             key = (
@@ -1235,12 +1146,10 @@ def process_date_pair_offers(
             seen.add(key)
             added += 1
 
-        print(
-            f"[PAIR {dep} -> {ret}] merged {added} direct-only offers, "
-            f"total now {len(batch_mapped)}"
-        )
+        print(f"[PAIR {dep} -> {ret}] merged {added} direct-only offers, total now {len(batch_mapped)}")
 
     return batch_mapped
+
 
 def run_search_job(job_id: str):
     job = JOBS.get(job_id)
@@ -1264,10 +1173,6 @@ def run_search_job(job_id: str):
         job.processed_pairs = 0
         job.updated_at = datetime.utcnow()
         JOBS[job_id] = job
-        print(
-            f"[JOB {job_id}] total_pairs={total_pairs}, "
-            f"max_offers_pair={max_offers_pair}, max_offers_total={max_offers_total}"
-        )
 
         if total_pairs == 0:
             job.status = JobStatus.COMPLETED
@@ -1280,7 +1185,6 @@ def run_search_job(job_id: str):
         parallel_workers = get_config_int("PARALLEL_WORKERS", PARALLEL_WORKERS)
         parallel_workers = max(1, min(parallel_workers, 16))
 
-        # Safety timeout for each batch of Duffel calls, in seconds
         batch_timeout_seconds = 120
 
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
@@ -1291,13 +1195,7 @@ def run_search_job(job_id: str):
 
                 batch_pairs = date_pairs[batch_start: batch_start + parallel_workers]
                 futures = {
-                    executor.submit(
-                        process_date_pair_offers,
-                        job.params,
-                        dep,
-                        ret,
-                        max_offers_pair,
-                    ): (dep, ret)
+                    executor.submit(process_date_pair_offers, job.params, dep, ret, max_offers_pair): (dep, ret)
                     for dep, ret in batch_pairs
                 }
 
@@ -1309,11 +1207,6 @@ def run_search_job(job_id: str):
                         job.updated_at = datetime.utcnow()
                         JOBS[job_id] = job
 
-                        print(
-                            f"[JOB {job_id}] processed pair {job.processed_pairs}/{total_pairs}: "
-                            f"{dep} -> {ret}, current_results={total_count}"
-                        )
-
                         try:
                             batch_mapped = future.result()
                         except Exception as e:
@@ -1321,94 +1214,41 @@ def run_search_job(job_id: str):
                             continue
 
                         if not batch_mapped:
-                            print(f"[JOB {job_id}] pair {dep} -> {ret}: no offers returned from Duffel")
                             continue
 
-                        # Per date pair filtering
                         filtered_pair = apply_filters(batch_mapped, job.params)
-                        print(
-                            f"[JOB {job_id}] pair {dep} -> {ret}: "
-                            f"filtered down to {len(filtered_pair)} offers"
-                        )
-
                         if not filtered_pair:
-                            print(f"[JOB {job_id}] pair {dep} -> {ret}: no offers after filters")
                             continue
 
-                        # Debug airline distribution before per pair balancing
-                        airline_counts_pair = Counter(
-                            opt.airlineCode or opt.airline for opt in filtered_pair
-                        )
-                        print(
-                            f"[JOB {job_id}] pair {dep} -> {ret}: "
-                            f"airline mix before balance: {dict(airline_counts_pair)}"
-                        )
-
-                        # Enforce per pair cap, list already sorted by price in apply_filters
                         if len(filtered_pair) > max_offers_pair:
-                            print(
-                                f"[JOB {job_id}] pair {dep} -> {ret}: capping offers from "
-                                f"{len(filtered_pair)} to {max_offers_pair} using max_offers_pair"
-                            )
                             filtered_pair = filtered_pair[:max_offers_pair]
 
-                        # Balance airlines inside this specific date pair
                         balanced_pair = balance_airlines(filtered_pair, max_total=max_offers_pair)
-                        print(
-                            f"[JOB {job_id}] pair {dep} -> {ret}: "
-                            f"balance_airlines returned {len(balanced_pair)} offers"
-                        )
-
                         if not balanced_pair:
                             continue
 
-                        # Apply an extra per pair global cap to avoid one airline dominating this batch
                         balanced_pair = apply_global_airline_cap(balanced_pair, max_share=0.3)
 
-                        # Respect global max_offers_total when aggregating results
                         current_results = JOB_RESULTS.get(job_id, [])
                         remaining_slots = max_offers_total - len(current_results)
-
                         if remaining_slots <= 0:
-                            print(
-                                f"[JOB {job_id}] global max_offers_total={max_offers_total} "
-                                f"reached, skipping further additions"
-                            )
                             total_count = len(current_results)
                             break
 
                         if len(balanced_pair) > remaining_slots:
-                            print(
-                                f"[JOB {job_id}] pair {dep} -> {ret}: "
-                                f"trimming balanced offers from {len(balanced_pair)} "
-                                f"to remaining_slots={remaining_slots} due to global cap"
-                            )
                             balanced_pair = balanced_pair[:remaining_slots]
 
-                        # Merge pair into the existing results
                         merged = current_results + balanced_pair
-
-                        # Apply global airline cap incrementally
                         merged = apply_global_airline_cap(merged, max_share=0.5)
 
                         JOB_RESULTS[job_id] = merged
                         total_count = len(merged)
 
-                        print(
-                            f"[JOB {job_id}] partial results updated after cap, count={total_count}"
-                        )
-
                         if total_count >= max_offers_total:
-                            print(
-                                f"[JOB {job_id}] Reached max_offers_total={max_offers_total}, stopping"
-                            )
                             break
 
                 except Exception as e:
-                    error_msg = (
-                        f"Timed out or failed waiting for batch Duffel responses "
-                        f"after {batch_timeout_seconds} seconds: {e}"
-                    )
+                    error_msg = f"Timed out or failed waiting for batch Duffel responses after {batch_timeout_seconds} seconds: {e}"
                     print(f"[JOB {job_id}] {error_msg}")
                     job.status = JobStatus.FAILED
                     job.error = error_msg
@@ -1420,8 +1260,6 @@ def run_search_job(job_id: str):
                     break
 
         final_results = JOB_RESULTS.get(job_id, [])
-
-        # Apply a global cap so no single airline dominates the async results
         final_results = apply_global_airline_cap(final_results, max_share=0.5)
         JOB_RESULTS[job_id] = final_results
 
@@ -1430,7 +1268,6 @@ def run_search_job(job_id: str):
         JOBS[job_id] = job
         print(f"[JOB {job_id}] Completed with {len(final_results)} options")
 
-
     except Exception as e:
         job.status = JobStatus.FAILED
         job.error = str(e)
@@ -1438,12 +1275,14 @@ def run_search_job(job_id: str):
         JOBS[job_id] = job
         print(f"[JOB {job_id}] FAILED: {e}")
 
-# ===== END SECTION: ASYNC JOB RUNNER =====
+# =====================================================================
+# SECTION END: ASYNC JOB RUNNER
+# =====================================================================
 
 
-# =======================================
-# SECTION: PRICE WATCH HELPERS
-# =======================================
+# =====================================================================
+# SECTION START: PRICE WATCH HELPERS
+# =====================================================================
 
 def run_price_watch() -> Dict[str, Any]:
     if not WATCH_START_DATE or not WATCH_END_DATE:
@@ -1483,9 +1322,7 @@ def run_price_watch() -> Dict[str, Any]:
     watched_pairs = generate_date_pairs(params, max_pairs=365)
     options = run_duffel_scan(params)
 
-    scanned_pairs: List[Tuple[str, str]] = sorted(
-        {(opt.departureDate, opt.returnDate) for opt in options}
-    )
+    scanned_pairs: List[Tuple[str, str]] = sorted({(opt.departureDate, opt.returnDate) for opt in options})
     if scanned_pairs:
         last_scanned_dep, last_scanned_ret = scanned_pairs[-1]
     else:
@@ -1537,7 +1374,8 @@ def run_price_watch() -> Dict[str, Any]:
 
             flights_under = []
             if status == "under_threshold":
-                flyyv_link = build_flyyv_link(params, cheapest.departureDate, cheapest.returnDate)
+                # build_flyyv_link exists in alerts_email.py, used there.
+                # Keeping the original behavior here, you can adapt later.
                 flights_under.append(
                     {
                         "airline": cheapest.airline,
@@ -1548,7 +1386,7 @@ def run_price_watch() -> Dict[str, Any]:
                         "destination": cheapest.destination,
                         "departureDate": cheapest.departureDate,
                         "returnDate": cheapest.returnDate,
-                        "flyyvLink": flyyv_link,
+                        "flyyvLink": "",
                         "airlineUrl": cheapest.url or "",
                     }
                 )
@@ -1583,12 +1421,29 @@ def run_price_watch() -> Dict[str, Any]:
         "pairs": pairs_summary,
     }
 
-# ===== END SECTION: PRICE WATCH HELPERS =====
+# =====================================================================
+# SECTION END: PRICE WATCH HELPERS
+# =====================================================================
 
 
-# =======================================
-# SECTION: ALERT ENGINE HELPERS
-# =======================================
+# =====================================================================
+# SECTION START: ALERT ENGINE HELPERS
+# =====================================================================
+
+def _derive_alert_passengers(alert: Any) -> int:
+    """
+    Backwards compatible passenger resolution.
+    Supports DB models that do not yet have a passengers column.
+    """
+    value = getattr(alert, "passengers", None)
+    if value is None:
+        value = getattr(alert, "number_of_passengers", None)
+    try:
+        value_int = int(value) if value is not None else 1
+    except Exception:
+        value_int = 1
+    return max(1, value_int)
+
 
 def build_search_params_for_alert(alert: Alert) -> SearchParams:
     dep_start = alert.departure_start
@@ -1601,6 +1456,8 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         min_stay = 1
         max_stay = 21
 
+    pax = _derive_alert_passengers(alert)
+
     return SearchParams(
         origin=alert.origin,
         destination=alert.destination,
@@ -1610,65 +1467,12 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         maxStayDays=max_stay,
         maxPrice=alert.max_price,
         cabin=alert.cabin or "BUSINESS",
-        passengers=1,
+        passengers=pax,
         stopsFilter=None,
-        # Alerts are lighter than interactive searches to avoid overloading Duffel
         maxOffersPerPair=120,
         maxOffersTotal=1200,
     )
 
-
-def send_alert_email_for_alert(alert: Alert, cheapest: FlightOption, params: SearchParams) -> None:
-    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_FROM_EMAIL):
-        raise HTTPException(
-            status_code=500,
-            detail="SMTP settings are not fully configured on the server",
-        )
-
-    to_email = alert.user_email
-    if not to_email:
-        raise HTTPException(status_code=500, detail="Alert has no user_email")
-
-    subject = (
-    f"Flyyv Alert: {alert.origin} \u2192 {alert.destination} "
-    f"from £{int(cheapest.price)}"
-    )
-
-    dep_dt = datetime.fromisoformat(cheapest.departureDate)
-    ret_dt = datetime.fromisoformat(cheapest.returnDate)
-    dep_label = dep_dt.strftime("%d-%m-%Y")
-    ret_label = ret_dt.strftime("%d-%m-%Y")
-
-    lines: List[str] = []
-
-    lines.append(
-        f"Route: {alert.origin} \u2192 {alert.destination}, {alert.cabin.title()} class"
-    )
-    lines.append(f"Dates: {dep_label} to {ret_label}")
-    lines.append("")
-    lines.append(
-        f"Cheapest fare found: £{int(cheapest.price)} "
-        f"with {cheapest.airline} ({cheapest.airlineCode or ''})"
-    )
-    lines.append("")
-    lines.append("To view this alert and explore more dates, go to your Flyyv dashboard:")
-    lines.append("https://flyyv.com")
-    lines.append("")
-    lines.append("You are receiving this because you created a Flyyv price alert.")
-    lines.append("To stop these alerts, delete the alert in your Flyyv profile.")
-
-    body = "\n".join(lines)
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
 
 def process_alert(alert: Alert, db: Session) -> None:
     now = datetime.utcnow()
@@ -1677,12 +1481,9 @@ def process_alert(alert: Alert, db: Session) -> None:
         f"email={alert.user_email} type={alert.alert_type} mode={alert.mode}"
     )
 
-    # Find the user for this alert
     user = db.query(AppUser).filter(AppUser.email == alert.user_email).first()
 
-    # If there is no user, record and skip
     if not user:
-        print(f"[alerts] process_alert SKIP id={alert.id} reason=no_user_for_alert")
         run_row = AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
@@ -1692,15 +1493,12 @@ def process_alert(alert: Alert, db: Session) -> None:
             reason="no_user_for_alert",
         )
         db.add(run_row)
-
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
         return
 
-    # Check master, global and per user switches
     if not should_send_alert(db, user):
-        print(f"[alerts] process_alert SKIP id={alert.id} reason=alerts_disabled")
         run_row = AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
@@ -1710,26 +1508,24 @@ def process_alert(alert: Alert, db: Session) -> None:
             reason="alerts_disabled",
         )
         db.add(run_row)
-
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
         return
 
-    # Search behaviour is shared for now, mode only affects formatting
     params = build_search_params_for_alert(alert)
     max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
+
     print(
         f"[alerts] process_alert SEARCH id={alert.id} "
         f"origin={params.origin} dest={params.destination} "
         f"dep_window={params.earliestDeparture}..{params.latestDeparture} "
-        f"mode={alert.mode} caps={max_pairs}/{max_offers_total}"
+        f"mode={alert.mode} pax={params.passengers} caps={max_pairs}/{max_offers_total}"
     )
 
     options = run_duffel_scan(params)
 
     if not options:
-        print(f"[alerts] process_alert NO_RESULTS id={alert.id}")
         run_row = AlertRun(
             id=str(uuid4()),
             alert_id=alert.id,
@@ -1739,7 +1535,6 @@ def process_alert(alert: Alert, db: Session) -> None:
             reason="no_results",
         )
         db.add(run_row)
-
         alert.last_run_at = now
         alert.updated_at = now
         db.commit()
@@ -1769,26 +1564,15 @@ def process_alert(alert: Alert, db: Session) -> None:
         should_send = True
         send_reason = f"unknown_type_{alert.alert_type}"
 
-    print(
-        f"[alerts] process_alert DECISION id={alert.id} "
-        f"should_send={should_send} reason={send_reason} "
-        f"current_price={current_price} last_price={alert.last_price} mode={alert.mode}"
-    )
-
     sent_flag = False
 
     if should_send:
         try:
             if alert.mode == "smart":
-                # Smart mode alerts get a summary email
-                # with multiple date pairs, like a Smart Search
                 send_smart_alert_email(alert, options_sorted, params)
             else:
-                # Other modes keep the simple one date pair email
                 send_alert_email_for_alert(alert, cheapest, params)
-
             sent_flag = True
-            print(f"[alerts] process_alert EMAIL_SENT id={alert.id} mode={alert.mode}")
         except Exception as e:
             print(f"[alerts] Failed to send email for alert {alert.id}: {e}")
             sent_flag = False
@@ -1812,14 +1596,8 @@ def process_alert(alert: Alert, db: Session) -> None:
 
     db.commit()
 
-    print(
-        f"[alerts] process_alert DONE id={alert.id} "
-        f"sent={sent_flag} reason={send_reason} price={current_price} mode={alert.mode}"
-    )
-
 
 def run_all_alerts_cycle() -> None:
-    # Hard master switch from environment
     if not master_alerts_enabled():
         print("[alerts] ALERTS_ENABLED is false, skipping alerts cycle")
         return
@@ -1834,7 +1612,6 @@ def run_all_alerts_cycle() -> None:
 
     db = SessionLocal()
     try:
-        # Global switch from admin_config
         if not alerts_globally_enabled(db):
             print("[alerts] Global alerts disabled in admin_config, skipping alerts cycle")
             return
@@ -1843,10 +1620,6 @@ def run_all_alerts_cycle() -> None:
         print(f"[alerts] Running alerts cycle for {len(alerts)} alerts")
 
         for alert in alerts:
-            print(
-                f"[alerts] CYCLE processing alert id={alert.id} "
-                f"email={alert.user_email} mode={alert.mode}"
-            )
             try:
                 process_alert(alert, db)
             except Exception as e:
@@ -1854,27 +1627,24 @@ def run_all_alerts_cycle() -> None:
     finally:
         db.close()
 
-# ===== END SECTION: ALERT ENGINE HELPERS =====
+# =====================================================================
+# SECTION END: ALERT ENGINE HELPERS
+# =====================================================================
 
-# =======================================
-# SECTION: EMAIL HELPERS
-# =======================================
+
+# =====================================================================
+# SECTION START: EMAIL HELPERS
+# =====================================================================
 
 def send_test_alert_email() -> None:
     if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
-        raise HTTPException(
-            status_code=500,
-            detail="SMTP settings are not fully configured on the server",
-        )
+        raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
 
     msg = EmailMessage()
     msg["Subject"] = "Flyyv test alert email"
     msg["From"] = ALERT_FROM_EMAIL
     msg["To"] = ALERT_TO_EMAIL
-    msg.set_content(
-        "This is a test Flyyv alert sent via SMTP2Go.\n\n"
-        "If you are reading this, SMTP is working."
-    )
+    msg.set_content("This is a test Flyyv alert sent via SMTP2Go.\n\nIf you are reading this, SMTP is working.")
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
@@ -1882,158 +1652,16 @@ def send_test_alert_email() -> None:
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to send test email: {e}",
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to send test email: {e}")
+
+# =====================================================================
+# SECTION END: EMAIL HELPERS
+# =====================================================================
 
 
-def send_daily_alert_email() -> None:
-    if not (SMTP_USERNAME and SMTP_PASSWORD and ALERT_TO_EMAIL):
-        raise HTTPException(
-            status_code=500,
-            detail="SMTP settings are not fully configured on the server",
-        )
-
-    watch = run_price_watch()
-    threshold = watch["max_price"]
-    pairs = watch["pairs"]
-    any_under = watch["any_under_threshold"]
-
-    start_dt = datetime.fromisoformat(watch["start_date"])
-    end_dt = datetime.fromisoformat(watch["end_date"])
-    start_label = start_dt.strftime("%d %B %Y")
-    end_label = end_dt.strftime("%d %B %Y")
-
-    if any_under:
-        subject_suffix = f"fare found under £{int(threshold)}"
-    else:
-        subject_suffix = "no changes"
-
-    subject = (
-        f"Your {watch['origin']} to {watch['destination']} watch, "
-        f"{subject_suffix}"
-    )
-
-    lines: List[str] = []
-
-    lines.append(
-        f"Watch: {watch['origin']} \u2192 {watch['destination']}, "
-        f"{watch['cabin'].title()} class, "
-        f"{watch['stay_nights']} nights, {watch['passengers']} pax, max £{int(threshold)}"
-    )
-    lines.append(f"Date window: {start_label} to {end_label}")
-    lines.append("")
-
-    if any_under:
-        lines.append(f"Deals found under your £{int(threshold)} limit:")
-        lines.append("")
-
-        for p in pairs:
-            if p["status"] != "under_threshold":
-                continue
-
-            dep_iso = p["departureDate"]
-            ret_iso = p["returnDate"]
-            dep_dt = datetime.fromisoformat(dep_iso)
-            ret_dt = datetime.fromisoformat(ret_iso)
-            dep_label = dep_dt.strftime("%d %b")
-            ret_label = ret_dt.strftime("%d %b")
-
-            cheapest_price = p["cheapestPrice"]
-            cheapest_airline = p["cheapestAirline"]
-            total_flights = p.get("totalFlights") or 0
-            min_price = p.get("minPrice")
-            max_price = p.get("MaxPrice") if "MaxPrice" in p else p.get("maxPrice")
-
-            if cheapest_price is None or cheapest_airline is None:
-                continue
-            if min_price is None or max_price is None:
-                min_price = cheapest_price
-                max_price = cheapest_price
-
-            flights_under = p.get("flightsUnderThreshold") or []
-            primary = flights_under[0] if flights_under else None
-
-            if primary:
-                route = f"{primary['origin']} \u2192 {primary['destination']}"
-                flyyv_link = primary["flyyvLink"]
-                airline_url = primary.get("airlineUrl") or ""
-            else:
-                route = f"{watch['origin']} \u2192 {watch['destination']}"
-                flyyv_link = ""
-                airline_url = ""
-
-            lines.append(
-                f"{dep_label} \u2192 {ret_label}: {total_flights} flights, "
-                f"range £{int(min_price)} to £{int(max_price)}, "
-                f"cheapest £{int(cheapest_price)} with {cheapest_airline}"
-            )
-            lines.append(f"  Route: {route}")
-            if flyyv_link:
-                lines.append(f"  View in Flyyv: {flyyv_link}")
-            if airline_url:
-                lines.append(f"  Airline site: {airline_url}")
-            lines.append("")
-    else:
-        lines.append(
-            f"No fares under £{int(threshold)} were found for any watched dates."
-        )
-        lines.append("")
-
-    lines.append("Summary of all watched dates:")
-    lines.append("")
-
-    for p in pairs:
-        dep_iso = p["departureDate"]
-        ret_iso = p["returnDate"]
-        dep_dt = datetime.fromisoformat(dep_iso)
-        ret_dt = datetime.fromisoformat(ret_iso)
-        dep_label = dep_dt.strftime("%d %b")
-        ret_label = ret_dt.strftime("%d %b")
-
-        status = p["status"]
-        total_flights = p.get("totalFlights") or 0
-        min_price = p.get("minPrice")
-        max_price = p.get("MaxPrice") if "MaxPrice" in p else p.get("maxPrice")
-
-        if status == "no_data":
-            note = "no data captured in this scan"
-        elif total_flights == 0 or min_price is None or max_price is None:
-            note = "no flights returned"
-        else:
-            note = (
-                f"{total_flights} flights, "
-                f"range £{int(min_price)} to £{int(max_price)}"
-            )
-
-        lines.append(f"{dep_label} \u2192 {ret_label}: {note}")
-
-    body = "\n".join(lines)
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = ALERT_FROM_EMAIL
-    msg["To"] = ALERT_TO_EMAIL
-    msg.set_content(body)
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.send_message(msg)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to send daily alert email: {e}",
-        )
-
-# ===== END SECTION: EMAIL HELPERS =====
-
-
-# =======================================
-# SECTION: ROOT, HEALTH AND ROUTES
-# =======================================
+# =====================================================================
+# SECTION START: ROOT, HEALTH AND ROUTES
+# =====================================================================
 
 @app.get("/")
 def home():
@@ -2052,35 +1680,24 @@ def list_routes():
 
 @app.get("/test-email-alert")
 def test_email_alert():
-    """
-    Basic SMTP smoke test.
-    Does NOT send a real Flyyv alert email.
-    """
     send_test_alert_email()
     return {"detail": "Test alert email sent"}
 
 
 @app.get("/test-email-confirmation")
 def test_email_confirmation(email: str = ALERT_TO_EMAIL, flex: int = 0):
-    """
-    Sends a confirmation-style email using a temporary dummy alert object.
-    Use flex=1 to test FlyyvFlex Smart Search Alert behavior.
-    """
-
     class DummyAlert:
         user_email = email
         origin = "LON"
         destination = "TLV"
         cabin = "BUSINESS"
-
         departure_start = datetime.utcnow().date()
         departure_end = (datetime.utcnow() + timedelta(days=30)).date()
-
         return_start = datetime.utcnow().date() + timedelta(days=7)
         return_end = datetime.utcnow().date() + timedelta(days=14)
-
         mode = "smart" if flex == 1 else "single"
         search_mode = "flexible" if flex == 1 else "single"
+        passengers = 1
 
     send_alert_confirmation_email(DummyAlert())
     return {"detail": f"Test confirmation email sent to {email}, flex={flex}"}
@@ -2088,26 +1705,19 @@ def test_email_confirmation(email: str = ALERT_TO_EMAIL, flex: int = 0):
 
 @app.get("/test-email-smart-alert")
 def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
-    """
-    Sends a FlyyvFlex Smart Alert email with dummy scan results.
-    Used to preview the real alert results email HTML.
-    """
-
     class DummyAlert:
         user_email = email
         origin = "LON"
         destination = "TLV"
         cabin = "BUSINESS"
         max_price = 2200
-
         departure_start = datetime.utcnow().date()
         departure_end = (datetime.utcnow() + timedelta(days=30)).date()
-
         return_start = datetime.utcnow().date() + timedelta(days=7)
-        return_end = datetime.utcnow().date() + timedelta(days=7)
-
+        return_end = (datetime.utcnow() + timedelta(days=7)).date()
         mode = "smart"
         search_mode = "flexible"
+        passengers = 1
 
     class DummyOption:
         def __init__(self, dep, ret, price, airline):
@@ -2117,24 +1727,9 @@ def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
             self.airline = airline
 
     options = [
-        DummyOption(
-            (datetime.utcnow() + timedelta(days=5)).date().isoformat(),
-            (datetime.utcnow() + timedelta(days=12)).date().isoformat(),
-            1890,
-            "British Airways",
-        ),
-        DummyOption(
-            (datetime.utcnow() + timedelta(days=8)).date().isoformat(),
-            (datetime.utcnow() + timedelta(days=15)).date().isoformat(),
-            2010,
-            "EL AL",
-        ),
-        DummyOption(
-            (datetime.utcnow() + timedelta(days=11)).date().isoformat(),
-            (datetime.utcnow() + timedelta(days=18)).date().isoformat(),
-            2140,
-            "Lufthansa",
-        ),
+        DummyOption((datetime.utcnow() + timedelta(days=5)).date().isoformat(), (datetime.utcnow() + timedelta(days=12)).date().isoformat(), 1890, "British Airways"),
+        DummyOption((datetime.utcnow() + timedelta(days=8)).date().isoformat(), (datetime.utcnow() + timedelta(days=15)).date().isoformat(), 2010, "EL AL"),
+        DummyOption((datetime.utcnow() + timedelta(days=11)).date().isoformat(), (datetime.utcnow() + timedelta(days=18)).date().isoformat(), 2140, "Lufthansa"),
     ]
 
     class DummyParams:
@@ -2162,21 +1757,19 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_all_alerts_cycle)
     return {"detail": "Alerts cycle queued"}
 
+# =====================================================================
+# SECTION END: ROOT, HEALTH AND ROUTES
+# =====================================================================
 
-# ===== END SECTION: ROOT, HEALTH AND ROUTES =====
 
-# =======================================
-# SECTION: MAIN SEARCH ROUTES
-# =======================================
+# =====================================================================
+# SECTION START: MAIN SEARCH ROUTES
+# =====================================================================
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not DUFFEL_ACCESS_TOKEN:
-        return {
-            "status": "error",
-            "source": "duffel_not_configured",
-            "options": [],
-        }
+        return {"status": "error", "source": "duffel_not_configured", "options": []}
 
     max_passengers = get_config_int("MAX_PASSENGERS", 4)
     if params.passengers > max_passengers:
@@ -2188,23 +1781,10 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
     estimated_pairs = estimate_date_pairs(params)
 
-    print(
-        f"[search_business] estimated_pairs={estimated_pairs}, "
-        f"fullCoverage={params.fullCoverage}"
-    )
-
     if estimated_pairs <= 1:
         options = run_duffel_scan(params)
-
-        # Apply a global cap so no single airline dominates the results
         options = apply_global_airline_cap(options, max_share=0.5)
-
-        return {
-            "status": "ok",
-            "mode": "sync",
-            "source": "duffel",
-            "options": [o.dict() for o in options],
-        }
+        return {"status": "ok", "mode": "sync", "source": "duffel", "options": [o.dict() for o in options]}
 
     job_id = str(uuid4())
     job = SearchJob(
@@ -2218,30 +1798,24 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     )
     JOBS[job_id] = job
     JOB_RESULTS[job_id] = []
-
     background_tasks.add_task(run_search_job, job_id)
 
-    return {
-        "status": "ok",
-        "mode": "async",
-        "jobId": job_id,
-        "message": "Search started",
-    }
+    return {"status": "ok", "mode": "async", "jobId": job_id, "message": "Search started"}
 
-# ===== END SECTION: MAIN SEARCH ROUTES =====
+# =====================================================================
+# SECTION END: MAIN SEARCH ROUTES
+# =====================================================================
 
 
-# =======================================
-# SECTION: SEARCH STATUS AND RESULTS ROUTES
-# =======================================
+# =====================================================================
+# SECTION START: SEARCH STATUS AND RESULTS ROUTES
+# =====================================================================
 
 @app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
 def get_search_status(job_id: str, preview_limit: int = 20):
     job = JOBS.get(job_id)
 
     if not job:
-        print(f"[search-status] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
-
         return SearchStatusResponse(
             jobId=job_id,
             status=JobStatus.PENDING,
@@ -2254,11 +1828,7 @@ def get_search_status(job_id: str, preview_limit: int = 20):
         )
 
     options = JOB_RESULTS.get(job_id, [])
-
-    if preview_limit > 0:
-        preview = options[:preview_limit]
-    else:
-        preview = []
+    preview = options[:preview_limit] if preview_limit > 0 else []
 
     total_pairs = job.total_pairs or 0
     processed_pairs = job.processed_pairs or 0
@@ -2280,7 +1850,6 @@ def get_search_status(job_id: str, preview_limit: int = 20):
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
     job = JOBS.get(job_id)
     if not job:
-        print(f"[search-results] Job {job_id} not found. Known jobs: {list(JOBS.keys())}")
         return SearchResultsResponse(
             jobId=job_id,
             status=JobStatus.PENDING,
@@ -2306,12 +1875,14 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
         options=slice_,
     )
 
-# ===== END SECTION: SEARCH STATUS AND RESULTS ROUTES =====
+# =====================================================================
+# SECTION END: SEARCH STATUS AND RESULTS ROUTES
+# =====================================================================
 
 
-# =======================================
-# SECTION: ADMIN CREDITS ENDPOINT
-# =======================================
+# =====================================================================
+# SECTION START: ADMIN CREDITS ENDPOINT
+# =====================================================================
 
 @app.post("/admin/add-credits")
 def admin_add_credits(
@@ -2350,112 +1921,16 @@ def admin_add_credits(
     new_balance = max(0, current + change_amount)
     USER_WALLETS[payload.userId] = new_balance
 
-    return {
-        "userId": payload.userId,
-        "newBalance": new_balance,
-    }
+    return {"userId": payload.userId, "newBalance": new_balance}
 
-# ===== END SECTION: ADMIN CREDITS ENDPOINT =====
-
-
-# =======================================
-# SECTION: CONFIG DEBUG ENDPOINT
-# =======================================
-
-@app.get("/config-debug")
-def config_debug(
-    x_admin_token: str = Header(None, alias="X-Admin-Token"),
-):
-    received = (x_admin_token or "").strip()
-    expected = (ADMIN_API_TOKEN or "").strip()
-
-    if received.lower().startswith("bearer "):
-        received = received[7:].strip()
-
-    if expected == "":
-        raise HTTPException(status_code=500, detail="Admin token not configured")
-
-    if received != expected:
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-
-    return {
-        "MAX_OFFERS_TOTAL": get_config_int("MAX_OFFERS_TOTAL", 4000),
-        "MAX_OFFERS_PER_PAIR": get_config_int("MAX_OFFERS_PER_PAIR", 80),
-        "MAX_DATE_PAIRS": get_config_int("MAX_DATE_PAIRS", 60),
-        "MAX_PASSENGERS": get_config_int("MAX_PASSENGERS", 4),
-        "DEFAULT_CABIN": get_config_str("DEFAULT_CABIN", "BUSINESS") or "BUSINESS",
-        "SEARCH_MODE": get_config_str("SEARCH_MODE", "AUTO") or "AUTO",
-        "MAX_OFFERS_PER_PAIR_HARD": MAX_OFFERS_PER_PAIR_HARD,
-        "MAX_OFFERS_TOTAL_HARD": MAX_OFFERS_TOTAL_HARD,
-        "MAX_DATE_PAIRS_HARD": MAX_DATE_PAIRS_HARD,
-        "PARALLEL_WORKERS": get_config_int("PARALLEL_WORKERS", PARALLEL_WORKERS),
-        "MAX_AIRLINE_SHARE_PERCENT": get_config_int("MAX_AIRLINE_SHARE_PERCENT", 40),
-        "ALERTS_SYSTEM_ENABLED": get_config_bool("ALERTS_SYSTEM_ENABLED", True),
-        "ALERTS_ENABLED_ENV": ALERTS_ENABLED,
-    }
-
-# ===== END SECTION: CONFIG DEBUG ENDPOINT =====
+# =====================================================================
+# SECTION END: ADMIN CREDITS ENDPOINT
+# =====================================================================
 
 
-# =======================================
-# SECTION: DUFFEL TEST ENDPOINT
-# =======================================
-
-@app.get("/duffel-test")
-def duffel_test(
-    origin: str,
-    destination: str,
-    departure: date,
-    passengers: int = 1,
-):
-    if not DUFFEL_ACCESS_TOKEN:
-        raise HTTPException(status_code=500, detail="Duffel not configured")
-
-    max_passengers = get_config_int("MAX_PASSENGERS", 4)
-    if passengers > max_passengers:
-        passengers = max_passengers
-
-    slices = [
-        {
-            "origin": origin,
-            "destination": destination,
-            "departure_date": departure.isoformat(),
-        }
-    ]
-    pax = [{"type": "adult"} for _ in range(passengers)]
-
-    offer_request = duffel_create_offer_request(slices, pax, "business")
-    offer_request_id = offer_request.get("id")
-    if not offer_request_id:
-        return {"status": "error", "message": "No offer_request id from Duffel"}
-
-    offers_json = duffel_list_offers(offer_request_id, limit=50)
-
-    results = []
-    for offer in offers_json:
-        owner = offer.get("owner", {}) or {}
-        results.append(
-            {
-                "id": offer.get("id"),
-                "airline": owner.get("name"),
-                "airlineCode": owner.get("iata_code"),
-                "price": float(offer.get("total_amount", 0)),
-                "currency": offer.get("total_currency", "GBP"),
-            }
-        )
-
-    return {
-        "status": "ok",
-        "source": "duffel",
-        "offers": results,
-    }
-
-# ===== END SECTION: DUFFEL TEST ENDPOINT =====
-
-
-# =======================================
-# SECTION: PUBLIC CONFIG, USER SYNC, PROFILE, ALERTS
-# =======================================
+# =====================================================================
+# SECTION START: PUBLIC CONFIG, USER SYNC, PROFILE
+# =====================================================================
 
 @app.get("/public-config", response_model=PublicConfig)
 def public_config():
@@ -2476,11 +1951,7 @@ def public_config():
 def user_sync(payload: UserSyncPayload):
     db = SessionLocal()
     try:
-        user = (
-            db.query(AppUser)
-            .filter(AppUser.external_id == payload.external_id)
-            .first()
-        )
+        user = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
 
         if user is None:
             user = AppUser(
@@ -2510,18 +1981,12 @@ def user_sync(payload: UserSyncPayload):
 
 
 @app.get("/profile", response_model=ProfileResponse)
-def get_profile(
-    x_user_id: str = Header(..., alias="X-User-Id"),
-):
+def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
     wallet_balance = USER_WALLETS.get(x_user_id, 0)
 
     db = SessionLocal()
     try:
-        app_user = (
-            db.query(AppUser)
-            .filter(AppUser.external_id == x_user_id)
-            .first()
-        )
+        app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
     finally:
         db.close()
 
@@ -2537,196 +2002,22 @@ def get_profile(
         name = "Flyyv user"
         email = None
 
-    profile_user = ProfileUser(
-        id=x_user_id,
-        name=name,
-        email=email,
-        plan="Free",
-    )
+    profile_user = ProfileUser(id=x_user_id, name=name, email=email, plan="Free")
 
-    subscription = SubscriptionInfo(
-        plan="Flyyv Free",
-        billingCycle=None,
-        renewalDate=None,
-        monthlyCredits=0,
-    )
+    subscription = SubscriptionInfo(plan="Flyyv Free", billingCycle=None, renewalDate=None, monthlyCredits=0)
 
-    wallet = WalletInfo(
-        balance=wallet_balance,
-        currency="credits",
-    )
+    wallet = WalletInfo(balance=wallet_balance, currency="credits")
 
-    return ProfileResponse(
-        user=profile_user,
-        subscription=subscription,
-        wallet=wallet,
-    )
+    return ProfileResponse(user=profile_user, subscription=subscription, wallet=wallet)
 
-# =====================================================
-# MODELS FOR ALERT DATE SUMMARY ENDPOINT
-# =====================================================
-
-class AlertDateSummaryItem(BaseModel):
-    departureDate: date
-    returnDate: date
-    flightCount: int
-    minPrice: int
-    maxPrice: int
+# =====================================================================
+# SECTION END: PUBLIC CONFIG, USER SYNC, PROFILE
+# =====================================================================
 
 
-class AlertDateSummaryResponse(BaseModel):
-    dates: List[AlertDateSummaryItem]
-
-
-# ===== BEGIN: LATEST ALERT RUN ENDPOINT =====
-
-@app.get("/alerts/{alert_id}/latest-run")
-def get_latest_alert_run(
-    alert_id: str,
-    email: Optional[str] = None,
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-):
-    db = SessionLocal()
-    try:
-        resolved_email: Optional[str] = None
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
-            if app_user and app_user.email:
-                resolved_email = app_user.email
-
-        if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
-
-        alert = (
-            db.query(Alert)
-            .filter(Alert.id == alert_id)
-            .filter(Alert.user_email == resolved_email)
-            .first()
-        )
-        if not alert:
-            raise HTTPException(status_code=404, detail="Alert not found")
-
-        latest_run = (
-            db.query(AlertRun)
-            .filter(AlertRun.alert_id == alert.id)
-            .order_by(AlertRun.run_at.desc())
-            .first()
-        )
-
-        base_alert_payload = {
-            "origin": alert.origin,
-            "destination": alert.destination,
-            "cabin": alert.cabin,
-            "alertType": alert.alert_type,
-            "maxPrice": alert.max_price,
-            "isActive": alert.is_active,
-            "timesSentTotal": alert.times_sent,
-            "lastPriceStored": alert.last_price,
-            "departureStart": alert.departure_start.isoformat(),
-            "departureEnd": alert.departure_end.isoformat(),
-            "returnStart": alert.return_start.isoformat() if alert.return_start else None,
-            "returnEnd": alert.return_end.isoformat() if alert.return_end else None,
-        }
-
-        if not latest_run:
-            return {
-                "alertId": alert.id,
-                "hasRun": False,
-                "alert": base_alert_payload,
-                "run": None,
-            }
-
-        price_part = (
-            f"£{latest_run.price_found}"
-            if latest_run.price_found is not None
-            else "no price captured"
-        )
-        reason_part = latest_run.reason or "no reason stored"
-
-        summary_text = (
-            f"Route: {alert.origin} \u2192 {alert.destination}, "
-            f"{alert.cabin.title()} class, "
-            f"last run at {latest_run.run_at.isoformat()}, "
-            f"latest price {price_part}, reason: {reason_part}"
-        )
-
-        return {
-            "alertId": alert.id,
-            "hasRun": True,
-            "alert": base_alert_payload,
-            "run": {
-                "runId": latest_run.id,
-                "runAt": latest_run.run_at.isoformat(),
-                "emailSent": latest_run.sent,
-                "sendReason": latest_run.reason,
-                "priceFound": latest_run.price_found,
-                "currency": "GBP",
-                "summaryText": summary_text,
-            },
-        }
-    finally:
-        db.close()
-
-# ===== END: LATEST ALERT RUN ENDPOINT =====
-
-
-# ===== BEGIN: ALERT DATE SUMMARY ENDPOINT =====
-
-@app.get("/alerts/{alert_id}/date-summary", response_model=AlertDateSummaryResponse)
-def get_alert_date_summary(
-    alert_id: str,
-    email: Optional[str] = None,
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-):
-    db = SessionLocal()
-    try:
-        # resolve email exactly the same way as latest-run
-        resolved_email: Optional[str] = None
-        if email is not None:
-            resolved_email = email
-        elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
-            if app_user and app_user.email:
-                resolved_email = app_user.email
-
-        if not resolved_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required either as query parameter or via an AppUser mapped to X-User-Id",
-            )
-
-        alert = (
-            db.query(Alert)
-            .filter(Alert.id == alert_id)
-            .filter(Alert.user_email == resolved_email)
-            .first()
-        )
-        if not alert:
-            raise HTTPException(status_code=404, detail="Alert not found")
-
-        # placeholder for now, frontend expects this shape
-        return AlertDateSummaryResponse(dates=[])
-    finally:
-        db.close()
-
-# ===== END: ALERT DATE SUMMARY ENDPOINT =====
-
-# =======================================
-# SECTION: ALERT ROUTES
-# =======================================
+# =====================================================================
+# SECTION START: ALERT ROUTES
+# =====================================================================
 
 @app.post("/alerts", response_model=AlertOut)
 def create_alert(payload: AlertCreate):
@@ -2735,27 +2026,17 @@ def create_alert(payload: AlertCreate):
         alert_id = str(uuid4())
         now = datetime.utcnow()
 
-        # Decide search_mode and derive mode
         search_mode_value = (payload.search_mode or "flexible").strip().lower()
-
         if search_mode_value not in ("flexible", "fixed"):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid search_mode, expected 'flexible' or 'fixed'",
-            )
+            raise HTTPException(status_code=400, detail="Invalid search_mode, expected 'flexible' or 'fixed'")
 
-        # Decide mode
         mode_value = (payload.mode or "").strip().lower()
-
-        # Absolute rule: any flexible window alert is a smart alert
         if search_mode_value == "flexible":
             mode_value = "smart"
         else:
-            # For non-flexible alerts, allow explicit mode if valid
             if mode_value not in ("smart", "single"):
                 mode_value = "single"
 
-            # Fixed trip length + date window = smart alert
             if (
                 payload.mode == "smart"
                 or (
@@ -2766,8 +2047,13 @@ def create_alert(payload: AlertCreate):
                 )
             ):
                 mode_value = "smart"
-        # End decide search_mode and derive mode
-        
+
+        # passenger validation
+        max_passengers = get_config_int("MAX_PASSENGERS", 4)
+        pax = max(1, int(payload.passengers or 1))
+        if pax > max_passengers:
+            pax = max_passengers
+
         alert = Alert(
             id=alert_id,
             user_email=payload.email,
@@ -2790,11 +2076,14 @@ def create_alert(payload: AlertCreate):
             updated_at=now,
         )
 
+        # Backwards compatible: only set if DB model supports it
+        if hasattr(alert, "passengers"):
+            setattr(alert, "passengers", pax)
+
         db.add(alert)
         db.commit()
         db.refresh(alert)
 
-        # Send immediate confirmation email (non-blocking safety)
         try:
             send_alert_confirmation_email(alert)
         except Exception:
@@ -2814,6 +2103,7 @@ def create_alert(payload: AlertCreate):
             alert_type=alert.alert_type,
             max_price=alert.max_price,
             mode=alert.mode,
+            passengers=_derive_alert_passengers(alert),
             times_sent=alert.times_sent,
             is_active=alert.is_active,
             last_price=alert.last_price,
@@ -2830,29 +2120,13 @@ def get_alerts(
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     include_inactive: bool = False,
 ):
-    """
-    Return list of alerts for a user.
-    Priority:
-      1. email query parameter
-      2. email resolved from X-User-Id via AppUser
-
-    include_inactive:
-      false (default): return only active alerts
-      true: return all alerts for the user
-    """
-
     resolved_email: Optional[str] = None
-
     db = SessionLocal()
     try:
         if email is not None:
             resolved_email = email
         elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
+            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user and app_user.email:
                 resolved_email = app_user.email
 
@@ -2863,7 +2137,6 @@ def get_alerts(
             )
 
         query = db.query(Alert).filter(Alert.user_email == resolved_email)
-
         if not include_inactive:
             query = query.filter(Alert.is_active == True)  # noqa: E712
 
@@ -2884,6 +2157,7 @@ def get_alerts(
                 alert_type=a.alert_type,
                 max_price=a.max_price,
                 mode=a.mode,
+                passengers=_derive_alert_passengers(a),
                 times_sent=a.times_sent,
                 is_active=a.is_active,
                 last_price=a.last_price,
@@ -2894,6 +2168,7 @@ def get_alerts(
         ]
     finally:
         db.close()
+
 
 @app.patch("/alerts/{alert_id}")
 def update_alert(
@@ -2908,11 +2183,7 @@ def update_alert(
         if email is not None:
             resolved_email = email
         elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
+            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user and app_user.email:
                 resolved_email = app_user.email
 
@@ -2933,32 +2204,34 @@ def update_alert(
 
         if payload.alert_type is not None:
             alert.alert_type = payload.alert_type
-
         if payload.max_price is not None:
             alert.max_price = payload.max_price
-
         if payload.is_active is not None:
             alert.is_active = payload.is_active
-
         if payload.departure_start is not None:
             alert.departure_start = payload.departure_start
-
         if payload.departure_end is not None:
             alert.departure_end = payload.departure_end
-
         if payload.return_start is not None:
             alert.return_start = payload.return_start
-
         if payload.return_end is not None:
             alert.return_end = payload.return_end
 
         if payload.mode is not None:
             if payload.mode not in ("single", "smart"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid alert mode, expected 'single' or 'smart'",
-                )
+                raise HTTPException(status_code=400, detail="Invalid alert mode, expected 'single' or 'smart'")
             alert.mode = payload.mode
+
+        incoming_pax = payload.passengers
+        if incoming_pax is None:
+            incoming_pax = payload.number_of_passengers
+        if incoming_pax is not None:
+            max_passengers = get_config_int("MAX_PASSENGERS", 4)
+            pax = max(1, int(incoming_pax))
+            if pax > max_passengers:
+                pax = max_passengers
+            if hasattr(alert, "passengers"):
+                setattr(alert, "passengers", pax)
 
         alert.updated_at = datetime.utcnow()
         db.commit()
@@ -2980,6 +2253,7 @@ def update_alert(
                 alert_type=alert.alert_type,
                 max_price=alert.max_price,
                 mode=alert.mode,
+                passengers=_derive_alert_passengers(alert),
                 times_sent=alert.times_sent,
                 is_active=alert.is_active,
                 last_price=alert.last_price,
@@ -2998,31 +2272,19 @@ def update_alert_status(
     email: Optional[str] = None,
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    """
-    Simple status toggle endpoint.
-    Accepts JSON body with is_active or isActive.
-    """
     db = SessionLocal()
     try:
         incoming_is_active = payload.is_active
         if incoming_is_active is None:
             incoming_is_active = payload.isActive
-
         if incoming_is_active is None:
-            raise HTTPException(
-                status_code=400,
-                detail="is_active is required in body as is_active or isActive",
-            )
+            raise HTTPException(status_code=400, detail="is_active is required in body as is_active or isActive")
 
         resolved_email: Optional[str] = None
         if email is not None:
             resolved_email = email
         elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
+            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user and app_user.email:
                 resolved_email = app_user.email
 
@@ -3046,11 +2308,7 @@ def update_alert_status(
         db.commit()
         db.refresh(alert)
 
-        return {
-            "status": "ok",
-            "id": alert.id,
-            "is_active": alert.is_active,
-        }
+        return {"status": "ok", "id": alert.id, "is_active": alert.is_active}
     finally:
         db.close()
 
@@ -3071,21 +2329,14 @@ def delete_alert(
         if email is not None:
             resolved_email = email
         elif x_user_id:
-            app_user = (
-                db.query(AppUser)
-                .filter(AppUser.external_id == x_user_id)
-                .first()
-            )
+            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user and app_user.email:
                 resolved_email = app_user.email
 
         if resolved_email and alert.user_email != resolved_email:
             raise HTTPException(status_code=403, detail="Alert does not belong to this user")
 
-        # First delete all alert_runs rows that reference this alert
         db.query(AlertRun).filter(AlertRun.alert_id == alert.id).delete(synchronize_session=False)
-
-        # Then hard delete the alert itself
         db.delete(alert)
         db.commit()
 
@@ -3093,4 +2344,6 @@ def delete_alert(
     finally:
         db.close()
 
-# ===== END SECTION: ALERT ROUTES =====
+# =====================================================================
+# SECTION END: ALERT ROUTES
+# =====================================================================
