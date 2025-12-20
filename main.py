@@ -1627,7 +1627,9 @@ def process_alert(alert: Alert, db: Session) -> None:
         reason=send_reason,
     ))
 
+    if stored_best_price is None or current_price < stored_best_price:
     alert.last_price = current_price
+
     alert.last_run_at = now
     alert.updated_at = now
 
