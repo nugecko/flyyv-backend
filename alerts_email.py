@@ -321,6 +321,8 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     cabin = _get_attr(alert, "cabin", "BUSINESS")
 
     passengers = _derive_passengers(alert=alert, params=params)
+    passenger_text = _passengers_label(passengers)  # "1 passenger" / "2 passengers"
+    cabin_title = str(cabin).title()  # "Business"
 
     grouped: Dict[Tuple[str, str], List] = {}
     for opt in options:
@@ -398,7 +400,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     # Plain text fallback
     lines: List[str] = []
     lines.append("FlyyvFlex Smart Search Alert")
-    lines.append(f"Route: {origin} → {destination}, {str(cabin).title()} class")
+    lines.append(f"Route: {origin} → {destination}, {cabin_title} class")
     lines.append(f"Passengers: {passengers}")
     lines.append("Prices shown are per passenger")
     if nights_text:
@@ -423,7 +425,15 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             ret_label = ret_dt.strftime("%d %b %Y")
             price_label = int(p["cheapestPrice"])
             airline_label = p.get("cheapestAirline") or "Multiple airlines"
-            lines.append(f"£{price_label} per passenger | {dep_label} to {ret_label} | {airline_label}")
+
+            within_txt = ""
+            try:
+                if threshold is not None and float(price_label) <= float(threshold):
+                    within_txt = f", within your £{int(float(threshold))} price range"
+            except Exception:
+                within_txt = ""
+
+            lines.append(f"£{price_label} per passenger | {dep_label} to {ret_label} | {airline_label}{within_txt}")
             lines.append(f"View flight: {p.get('flyyvLink')}")
             lines.append("")
 
@@ -444,11 +454,19 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         view_link = p.get("flyyvLink") or open_full_results_url
 
         within = False
+        threshold_int = None
         try:
-            if threshold is not None and float(price_label) <= float(threshold):
-                within = True
+            if threshold is not None:
+                threshold_int = int(float(threshold))
+                if float(price_label) <= float(threshold):
+                    within = True
         except Exception:
             within = False
+            threshold_int = None
+
+        within_html = ""
+        if within and threshold_int is not None:
+            within_html = f'<span style="color:#059669;font-weight:700;">, within your £{threshold_int} price range</span>'
 
         rows_html += f"""
           <tr>
@@ -463,7 +481,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                   </div>
                   <div style="font-size:13px;color:#111827;">
                     Cheapest option: <strong>{airline_label}</strong>
-                    {('<span style="color:#059669;font-weight:700;">, within your target</span>' if within else '')}
+                    {within_html}
                   </div>
                 </div>
                 <div style="text-align:right;min-width:140px;">
@@ -502,7 +520,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">FlyyvFlex Smart Search Alert</div>
 
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
-              Top deals for {origin} → {destination}
+              Top {cabin_title} deals for {passenger_text} going from {origin} → {destination}
             </div>
 
             <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
@@ -511,7 +529,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             </div>
 
             <div style="font-size:13px;color:#6b7280;margin:0 0 12px 0;">
-              Passengers: <strong>{_passengers_label(passengers)}</strong><br>
+              Passengers: <strong>{passenger_text}</strong><br>
               Prices shown are per passenger
             </div>
 
@@ -520,7 +538,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                 {str(cabin).upper()}
               </span>
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {_passengers_label(passengers)}
+                {passenger_text}
               </span>
               {combos_chip}
               {best_chip}
