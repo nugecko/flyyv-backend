@@ -467,7 +467,6 @@ JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 # SECTION END: IN MEMORY STORES
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: DUFFEL HELPERS
 # =====================================================================
@@ -849,6 +848,7 @@ def balance_airlines(
 
 
 # =====================================================================
+# =====================================================================
 # SECTION START: SHARED SEARCH HELPERS
 # =====================================================================
 
@@ -965,7 +965,7 @@ def fetch_direct_only_offers(
     results: List[FlightOption] = []
     for offer in offers_json:
         try:
-            opt = map_duffel_offer_to_option(offer, dep_date, ret_date)
+            opt = map_duffel_offer_to_option(offer, dep_date, ret_date, passengers=passengers)
             results.append(opt)
         except Exception as e:
             print(f"[direct_only] mapping error: {e}")
@@ -1052,7 +1052,10 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
             print(f"[search] no offers to map for dep={dep} ret={ret}")
             continue
 
-        mapped_pair: List[FlightOption] = [map_duffel_offer_to_option(offer, dep, ret) for offer in pair_offers]
+        mapped_pair: List[FlightOption] = [
+            map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
+            for offer in pair_offers
+        ]
         print(f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers")
 
         filtered_pair = apply_filters(mapped_pair, params)
@@ -1090,7 +1093,6 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION END: SHARED SEARCH HELPERS
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: ASYNC JOB RUNNER
 # =====================================================================
@@ -1122,7 +1124,10 @@ def process_date_pair_offers(
         print(f"[PAIR {dep} -> {ret}] Unexpected Duffel error: {e}")
         return []
 
-    batch_mapped: List[FlightOption] = [map_duffel_offer_to_option(offer, dep, ret) for offer in offers_json]
+    batch_mapped: List[FlightOption] = [
+        map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
+        for offer in offers_json
+    ]
 
     try:
         direct_options = fetch_direct_only_offers(
@@ -1299,7 +1304,6 @@ def run_search_job(job_id: str):
 # =====================================================================
 # SECTION END: ASYNC JOB RUNNER
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: PRICE WATCH HELPERS
