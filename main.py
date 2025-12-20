@@ -854,8 +854,6 @@ def balance_airlines(
 # SECTION END: FILTERING AND BALANCING
 # =====================================================================
 
-
-# =====================================================================
 # =====================================================================
 # SECTION START: SHARED SEARCH HELPERS
 # =====================================================================
@@ -972,11 +970,13 @@ def fetch_direct_only_offers(
 
     results: List[FlightOption] = []
     for offer in offers_json:
-    try:
-        opt = map_duffel_offer_to_option(offer, dep, ret, passengers=passengers)
-        results.append(opt)
-    except Exception as e:
-        print(f"[direct_only] mapping error: {e}")
+        try:
+            opt = map_duffel_offer_to_option(offer, dep_date, ret_date, passengers=passengers)
+            results.append(opt)
+        except Exception as e:
+            print(f"[direct_only] mapping error: {e}")
+
+    print(f"[direct_only] fetched {len(results)} direct offers")
     return results
 
 
@@ -1060,7 +1060,7 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
         mapped_pair: List[FlightOption] = [
             map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-            for offer in offers_json
+            for offer in pair_offers
         ]
 
         print(f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers")
