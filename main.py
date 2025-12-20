@@ -1531,25 +1531,26 @@ def process_alert(alert: Alert, db: Session) -> None:
         db.commit()
         return
 
-        params = build_search_params_for_alert(alert)
+    params = build_search_params_for_alert(alert)
+    if params is None:
+        raise RuntimeError("build_search_params_for_alert returned None")
 
     # For under-price alerts, do not apply maxPrice during the scan itself.
-    scan_params = params
     if alert.max_price is not None:
         try:
-            # Pydantic v2
-            scan_params = params.model_copy(update={"maxPrice": None})
+            scan_params = params.model_copy(update={"maxPrice": None})  # Pydantic v2
         except Exception:
             try:
-                # Pydantic v1
-                scan_params = params.copy(update={"maxPrice": None})
+                scan_params = params.copy(update={"maxPrice": None})  # Pydantic v1
             except Exception:
-                # Fallback for dataclass or plain objects
                 from copy import deepcopy
                 scan_params = deepcopy(params)
-                setattr(scan_params, "maxPrice", None)
+                scan_params.maxPrice = None
+    else:
+        scan_params = params
 
     options = run_duffel_scan(scan_params)
+
 
     if not options:
         db.add(AlertRun(
