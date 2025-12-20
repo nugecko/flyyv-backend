@@ -972,13 +972,11 @@ def fetch_direct_only_offers(
 
     results: List[FlightOption] = []
     for offer in offers_json:
-        try:
-            opt = map_duffel_offer_to_option(offer, dep_date, ret_date, passengers=passengers)
-            results.append(opt)
-        except Exception as e:
-            print(f"[direct_only] mapping error: {e}")
-
-    print(f"[direct_only] fetched {len(results)} direct offers")
+    try:
+        opt = map_duffel_offer_to_option(offer, dep, ret, passengers=passengers)
+        results.append(opt)
+    except Exception as e:
+        print(f"[direct_only] mapping error: {e}")
     return results
 
 
@@ -1062,8 +1060,9 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
         mapped_pair: List[FlightOption] = [
             map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-            for offer in pair_offers
+            for offer in offers_json
         ]
+
         print(f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers")
 
         filtered_pair = apply_filters(mapped_pair, params)
