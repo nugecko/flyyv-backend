@@ -1543,19 +1543,44 @@ def process_alert(alert: Alert, db: Session) -> None:
     cheapest = options_sorted[0]
     current_price = int(cheapest.price)
 
+        # Stored best price = lowest price_found in AlertRun history
+    best_run = (
+        db.query(AlertRun)
+        .filter(AlertRun.alert_id == alert.id)
+        .filter(AlertRun.price_found.isnot(None))
+        .order_by(AlertRun.price_found.asc())
+        .first()
+    )
+    stored_best_price = int(best_run.price_found) if best_run and best_run.price_found is not None else None
+
     should_send = False
     send_reason = None
 
-    if alert.alert_type == "price_change":
-        if alert.last_price is None or current_price != alert.last_price:
+    # Deterministic email rules
+    if alert.alert_type == "under_price":
+        if alert.max_price is not None and current_price <= int(alert.max_price):
             should_send = True
-            send_reason = "price_change"
-    elif alert.alert_type == "scheduled_3x":
+            send_reason = "under_price"
+        else:
+            send_reason = "not_under_price"
+
+    elif alert.alert_type == "new_best":
+        if stored_best_price is None:
+            should_send = True
+            send_reason = "first_best"
+        elif current_price < stored_best_price:
+            should_send = True
+            send_reason = "new_best"
+        else:
+            send_reason = "not_new_best"
+
+    elif alert.alert_type == "summary":
         should_send = True
-        send_reason = "scheduled"
+        send_reason = "summary"
+
     else:
-        should_send = True
-        send_reason = "fallback"
+        should_send = False
+        send_reason = "unknown_alert_type"
 
     sent_flag = False
 
