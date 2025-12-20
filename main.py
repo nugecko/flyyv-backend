@@ -1381,6 +1381,17 @@ def run_search_job(job_id: str):
                         # as a final safeguard inside this curated list.
                         balanced_pair = apply_global_airline_cap(balanced_pair, max_share=0.3)
 
+                        try:
+                           direct_taken = sum(1 for o in balanced_pair if _is_direct(o))
+                           uniq_airlines = len({_airline_key(o) for o in balanced_pair})
+                           print(
+                               f"[PAIR {dep} -> {ret}] curated pair_cap={pair_cap}, "
+                               f"direct_slots={direct_slots}, direct_taken={direct_taken}, "
+                               f"returned={len(balanced_pair)}, uniq_airlines={uniq_airlines}"
+                           )
+                       except Exception as _e:
+                           print(f"[PAIR {dep} -> {ret}] curated debug failed: {_e}")
+
                         # 4) Merge into global results with global caps as before
                         current_results = JOB_RESULTS.get(job_id, [])
                         remaining_slots = max_offers_total - len(current_results)
