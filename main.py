@@ -753,19 +753,29 @@ def map_duffel_offer_to_option(
 def apply_filters(options: List[FlightOption], params: SearchParams) -> List[FlightOption]:
     filtered = list(options)
 
+    # Debug: see what we're filtering out
+    if filtered:
+        stops_dist = Counter(o.stops for o in filtered)
+        print(f"[search] apply_filters: input={len(filtered)} stops_dist={dict(stops_dist)} maxPrice={params.maxPrice} stopsFilter={params.stopsFilter}")
+    else:
+        print("[search] apply_filters: input=0")
+
     if params.maxPrice is not None and params.maxPrice > 0:
+        before = len(filtered)
         filtered = [o for o in filtered if o.price <= params.maxPrice]
+        print(f"[search] apply_filters: maxPrice kept={len(filtered)}/{before}")
 
     if params.stopsFilter:
+        before = len(filtered)
         allowed = set(params.stopsFilter)
         if 3 in allowed:
             filtered = [o for o in filtered if (o.stops in allowed or o.stops >= 3)]
         else:
             filtered = [o for o in filtered if o.stops in allowed]
+        print(f"[search] apply_filters: stopsFilter kept={len(filtered)}/{before} allowed={sorted(list(allowed))}")
 
     filtered.sort(key=lambda o: (o.stops, o.price))
     return filtered
-
 
 def balance_airlines(
     options: List[FlightOption],
