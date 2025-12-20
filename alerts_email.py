@@ -520,7 +520,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">FlyyvFlex Smart Search Alert</div>
 
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
-              Top {cabin_title} deals for {passenger_text} going from {origin} → {destination}
+              Top {cabin_title} class deals for {passenger_text} going from {origin} → {destination}
             </div>
 
             <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
