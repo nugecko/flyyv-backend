@@ -2095,7 +2095,7 @@ def create_alert(payload: AlertCreate):
             departure_end=payload.departure_end,
             return_start=payload.return_start,
             return_end=payload.return_end,
-            alert_type=payload.alert_type,
+            alert_type=("under_price" if payload.max_price is not None else payload.alert_type),
             max_price=payload.max_price,
             mode=mode_value,
             last_price=None,
