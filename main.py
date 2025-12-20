@@ -1679,11 +1679,15 @@ def run_all_alerts_cycle() -> None:
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
         print(f"[alerts] Running alerts cycle for {len(alerts)} alerts")
 
+        import traceback
+
         for alert in alerts:
             try:
                 process_alert(alert, db)
             except Exception as e:
                 print(f"[alerts] Error processing alert {alert.id}: {e}")
+                traceback.print_exc()
+
     finally:
         db.close()
 
