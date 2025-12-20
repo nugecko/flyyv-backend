@@ -1556,15 +1556,21 @@ def process_alert(alert: Alert, db: Session) -> None:
     should_send = False
     send_reason = None
 
+    effective_type = alert.alert_type
+    if effective_type == "price_change":
+        effective_type = "new_best"
+    elif effective_type == "scheduled_3x":
+        effective_type = "summary"
+
     # Deterministic email rules
-    if alert.alert_type == "under_price":
+    if effective_type == "under_price":
         if alert.max_price is not None and current_price <= int(alert.max_price):
             should_send = True
             send_reason = "under_price"
         else:
             send_reason = "not_under_price"
 
-    elif alert.alert_type == "new_best":
+    elif effective_type == "new_best":
         if stored_best_price is None:
             should_send = True
             send_reason = "first_best"
@@ -1574,7 +1580,7 @@ def process_alert(alert: Alert, db: Session) -> None:
         else:
             send_reason = "not_new_best"
 
-    elif alert.alert_type == "summary":
+    elif effective_type == "summary":
         should_send = True
         send_reason = "summary"
 
