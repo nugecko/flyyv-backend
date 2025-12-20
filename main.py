@@ -1566,11 +1566,17 @@ def process_alert(alert: Alert, db: Session) -> None:
     should_send = False
     send_reason = None
 
+    # Map legacy types, then override to "under_price" if a threshold is set
     effective_type = alert.alert_type
     if effective_type == "price_change":
         effective_type = "new_best"
     elif effective_type == "scheduled_3x":
         effective_type = "summary"
+
+    if alert.max_price is not None:
+        effective_type = "under_price"
+
+    stored_best_price = alert.last_price
 
     # Deterministic email rules
     if effective_type == "under_price":
