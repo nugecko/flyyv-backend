@@ -1734,7 +1734,6 @@ def send_test_alert_email() -> None:
 # SECTION END: EMAIL HELPERS
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: ROOT, HEALTH AND ROUTES
 # =====================================================================
@@ -1778,9 +1777,10 @@ def test_email_confirmation(email: str = ALERT_TO_EMAIL, flex: int = 0):
     send_alert_confirmation_email(DummyAlert())
     return {"detail": f"Test confirmation email sent to {email}, flex={flex}"}
 
-
 @app.get("/test-email-smart-alert")
 def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
+    print(f"[test-email-smart-alert] START to={email}")
+
     class DummyAlert:
         user_email = email
         origin = "LON"
@@ -1803,9 +1803,24 @@ def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
             self.airline = airline
 
     options = [
-        DummyOption((datetime.utcnow() + timedelta(days=5)).date().isoformat(), (datetime.utcnow() + timedelta(days=12)).date().isoformat(), 1890, "British Airways"),
-        DummyOption((datetime.utcnow() + timedelta(days=8)).date().isoformat(), (datetime.utcnow() + timedelta(days=15)).date().isoformat(), 2010, "EL AL"),
-        DummyOption((datetime.utcnow() + timedelta(days=11)).date().isoformat(), (datetime.utcnow() + timedelta(days=18)).date().isoformat(), 2140, "Lufthansa"),
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=5)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=12)).date().isoformat(),
+            1890,
+            "British Airways",
+        ),
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=8)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=15)).date().isoformat(),
+            2010,
+            "EL AL",
+        ),
+        DummyOption(
+            (datetime.utcnow() + timedelta(days=11)).date().isoformat(),
+            (datetime.utcnow() + timedelta(days=18)).date().isoformat(),
+            2140,
+            "Lufthansa",
+        ),
     ]
 
     class DummyParams:
@@ -1818,8 +1833,9 @@ def test_email_smart_alert(email: str = ALERT_TO_EMAIL):
         search_mode = "flexible"
 
     send_smart_alert_email(DummyAlert(), options, DummyParams())
-    return {"detail": f"Test smart alert email sent to {email}"}
 
+    print(f"[test-email-smart-alert] SENT OK to={email}")
+    return {"detail": f"Test smart alert email sent to {email}"}
 
 @app.get("/trigger-daily-alert")
 def trigger_daily_alert(background_tasks: BackgroundTasks):
