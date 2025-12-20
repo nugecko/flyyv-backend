@@ -1485,7 +1485,7 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         latestDeparture=dep_end,
         minStayDays=min_stay,
         maxStayDays=max_stay,
-        maxPrice=alert.max_price,
+        maxPrice=None,
         cabin=alert.cabin or "BUSINESS",
         passengers=pax,
         stopsFilter=None,
