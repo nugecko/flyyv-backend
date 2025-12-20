@@ -1110,9 +1110,23 @@ def process_date_pair_offers(
     ret: date,
     max_offers_pair: int,
 ) -> List[FlightOption]:
+    """
+    Fetch offers for one (dep, ret) pair:
+      1) Duffel offers (limit=max_offers_pair)
+      2) Direct-only offers (small extra pool)
+      3) Merge direct-only into the pair pool without duplicates
+    """
     slices = [
-        {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
-        {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
+        {
+            "origin": params.origin,
+            "destination": params.destination,
+            "departure_date": dep.isoformat(),
+        },
+        {
+            "origin": params.destination,
+            "destination": params.origin,
+            "departure_date": ret.isoformat(),
+        },
     ]
     pax = [{"type": "adult"} for _ in range(params.passengers)]
 
@@ -1136,6 +1150,7 @@ def process_date_pair_offers(
         for offer in offers_json
     ]
 
+    # Pull a small "direct-only" pool and merge in, this improves perceived trust and speed for users
     try:
         direct_options = fetch_direct_only_offers(
             origin=params.origin,
@@ -1157,7 +1172,7 @@ def process_date_pair_offers(
                 opt.airlineCode or opt.airline,
                 opt.departureDate,
                 opt.returnDate,
-                opt.stops,
+                getattr(opt, "stops", getattr(opt, "numStops", None)),
                 opt.originAirport,
                 opt.destinationAirport,
             )
@@ -1169,7 +1184,7 @@ def process_date_pair_offers(
                 opt.airlineCode or opt.airline,
                 opt.departureDate,
                 opt.returnDate,
-                opt.stops,
+                getattr(opt, "stops", getattr(opt, "numStops", None)),
                 opt.originAirport,
                 opt.destinationAirport,
             )
@@ -1179,12 +1194,21 @@ def process_date_pair_offers(
             seen.add(key)
             added += 1
 
-        print(f"[PAIR {dep} -> {ret}] merged {added} direct-only offers, total now {len(batch_mapped)}")
+        print(
+            f"[PAIR {dep} -> {ret}] merged {added} direct-only offers, total now {len(batch_mapped)}"
+        )
 
     return batch_mapped
 
 
 def run_search_job(job_id: str):
+    """
+    Async job runner:
+      - Generates date pairs
+      - Fetches offers per pair in parallel
+      - Applies per-pair curation (max 20, direct quota, per-pair airline cap)
+      - Merges curated results into global results with global caps
+    """
     job = JOBS.get(job_id)
     if not job:
         print(f"[JOB {job_id}] Job not found in memory")
@@ -1202,6 +1226,7 @@ def run_search_job(job_id: str):
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
+
         job.total_pairs = total_pairs
         job.processed_pairs = 0
         job.updated_at = datetime.utcnow()
@@ -1220,6 +1245,65 @@ def run_search_job(job_id: str):
 
         batch_timeout_seconds = 120
 
+        # Read optional tuning knobs from admin_config (Directus).
+        # Defaults are safe and match your plan.
+        direct_quota_pct_raw = get_config_str("DIRECT_QUOTA_PCT", None)
+        per_pair_cap_pct_raw = get_config_str("PER_PAIR_AIRLINE_CAP_PCT", None)
+
+        try:
+            direct_quota_pct = float(direct_quota_pct_raw) if direct_quota_pct_raw else 0.3
+        except Exception:
+            direct_quota_pct = 0.3
+
+        try:
+            per_pair_airline_cap_pct = float(per_pair_cap_pct_raw) if per_pair_cap_pct_raw else 0.3
+        except Exception:
+            per_pair_airline_cap_pct = 0.3
+
+        direct_quota_pct = max(0.0, min(direct_quota_pct, 1.0))
+        per_pair_airline_cap_pct = max(0.0, min(per_pair_airline_cap_pct, 1.0))
+
+        pair_cap = max(1, int(max_offers_pair))
+
+        # Convert pct to absolute per-airline cap inside each date-pair.
+        if per_pair_airline_cap_pct <= 0.0:
+            per_airline_cap = pair_cap
+        else:
+            per_airline_cap = int(round(pair_cap * per_pair_airline_cap_pct))
+            per_airline_cap = max(1, min(per_airline_cap, pair_cap))
+
+        direct_slots = int(round(pair_cap * direct_quota_pct))
+        direct_slots = max(0, min(direct_slots, pair_cap))
+        non_direct_slots = pair_cap - direct_slots
+
+        def _is_direct(opt: FlightOption) -> bool:
+            stops_val = getattr(opt, "stops", getattr(opt, "numStops", None))
+            if stops_val is None:
+                return False
+            try:
+                return int(stops_val) == 0
+            except Exception:
+                return False
+
+        def _airline_key(opt: FlightOption) -> str:
+            v = getattr(opt, "airlineCode", None) or getattr(opt, "airline", None)
+            if v:
+                return str(v)
+            return "UNKNOWN"
+
+        def _take_with_cap(candidates: List[FlightOption], limit: int) -> List[FlightOption]:
+            picked: List[FlightOption] = []
+            counts: Dict[str, int] = {}
+            for opt in candidates:
+                if len(picked) >= limit:
+                    break
+                a = _airline_key(opt)
+                if counts.get(a, 0) >= per_airline_cap:
+                    continue
+                picked.append(opt)
+                counts[a] = counts.get(a, 0) + 1
+            return picked
+
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
             for batch_start in range(0, total_pairs, parallel_workers):
                 if total_count >= max_offers_total:
@@ -1228,7 +1312,13 @@ def run_search_job(job_id: str):
 
                 batch_pairs = date_pairs[batch_start: batch_start + parallel_workers]
                 futures = {
-                    executor.submit(process_date_pair_offers, job.params, dep, ret, max_offers_pair): (dep, ret)
+                    executor.submit(
+                        process_date_pair_offers,
+                        job.params,
+                        dep,
+                        ret,
+                        max_offers_pair,
+                    ): (dep, ret)
                     for dep, ret in batch_pairs
                 }
 
@@ -1249,19 +1339,49 @@ def run_search_job(job_id: str):
                         if not batch_mapped:
                             continue
 
+                        # 1) Pair-level filtering only
                         filtered_pair = apply_filters(batch_mapped, job.params)
                         if not filtered_pair:
                             continue
 
-                        if len(filtered_pair) > max_offers_pair:
-                            filtered_pair = filtered_pair[:max_offers_pair]
+                        # 2) Pair-level curation to pair_cap with direct quota and per-pair airline cap
+                        pair_direct = [o for o in filtered_pair if _is_direct(o)]
+                        pair_non_direct = [o for o in filtered_pair if not _is_direct(o)]
 
-                        balanced_pair = balance_airlines(filtered_pair, max_total=max_offers_pair)
+                        picked_direct = _take_with_cap(pair_direct, direct_slots)
+
+                        # Roll unused direct slots into non-direct
+                        remaining_for_non_direct = non_direct_slots + max(0, direct_slots - len(picked_direct))
+                        picked_non_direct = _take_with_cap(pair_non_direct, remaining_for_non_direct)
+
+                        curated_pair = picked_direct + picked_non_direct
+
+                        # Top up if we still have room (airline cap too strict)
+                        if len(curated_pair) < pair_cap:
+                            seen_ids = {id(o) for o in curated_pair}
+                            for opt in filtered_pair:
+                                if len(curated_pair) >= pair_cap:
+                                    break
+                                if id(opt) in seen_ids:
+                                    continue
+                                curated_pair.append(opt)
+                                seen_ids.add(id(opt))
+
+                        # Final hard cap
+                        if len(curated_pair) > pair_cap:
+                            curated_pair = curated_pair[:pair_cap]
+
+                        # 3) Optional: keep your existing balance step (still inside this date-pair only)
+                        balanced_pair = balance_airlines(curated_pair, max_total=pair_cap)
                         if not balanced_pair:
                             continue
 
+                        # Keep your existing "stricter per-pair cap" behavior.
+                        # If apply_global_airline_cap is truly global-only in semantics, it still works
+                        # as a final safeguard inside this curated list.
                         balanced_pair = apply_global_airline_cap(balanced_pair, max_share=0.3)
 
+                        # 4) Merge into global results with global caps as before
                         current_results = JOB_RESULTS.get(job_id, [])
                         remaining_slots = max_offers_total - len(current_results)
                         if remaining_slots <= 0:
@@ -1281,7 +1401,10 @@ def run_search_job(job_id: str):
                             break
 
                 except Exception as e:
-                    error_msg = f"Timed out or failed waiting for batch Duffel responses after {batch_timeout_seconds} seconds: {e}"
+                    error_msg = (
+                        f"Timed out or failed waiting for batch Duffel responses after "
+                        f"{batch_timeout_seconds} seconds: {e}"
+                    )
                     print(f"[JOB {job_id}] {error_msg}")
                     job.status = JobStatus.FAILED
                     job.error = error_msg
