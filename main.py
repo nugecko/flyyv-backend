@@ -568,8 +568,17 @@ def map_duffel_offer_to_option(
     offer: dict,
     dep: date,
     ret: date,
+    passengers: int,
 ) -> FlightOption:
-    price = float(offer.get("total_amount", 0))
+    """
+    PRICE CONTRACT:
+    - Duffel offer.total_amount is TOTAL for all passengers
+    - FlightOption.price is PER PASSENGER
+    """
+    pax = max(1, int(passengers or 1))
+
+    total_price = float(offer.get("total_amount", 0) or 0)
+    price = total_price / pax
     currency = offer.get("total_currency", "GBP")
 
     owner = offer.get("owner", {}) or {}
@@ -743,7 +752,6 @@ def map_duffel_offer_to_option(
 # =====================================================================
 # SECTION END: DUFFEL HELPERS
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: FILTERING AND BALANCING
