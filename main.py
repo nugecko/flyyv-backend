@@ -1550,7 +1550,7 @@ def process_alert(alert: Alert, db: Session) -> None:
         scan_params = params
 
     options = run_duffel_scan(scan_params)
-
+    print(f"[alerts] scan complete alert_id={alert.id} options_count={len(options)} scan_maxPrice={getattr(scan_params, 'maxPrice', None)}")
 
     if not options:
         db.add(AlertRun(
@@ -1559,7 +1559,8 @@ def process_alert(alert: Alert, db: Session) -> None:
             run_at=now,
             price_found=None,
             sent=False,
-            reason="no_results",
+            reason="no_results_scan_empty",
+
         ))
         alert.last_run_at = now
         alert.updated_at = now
