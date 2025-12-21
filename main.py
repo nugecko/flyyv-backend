@@ -1243,6 +1243,13 @@ def fetch_direct_only_offers(
 
     try:
         offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+
+    # Duffel can be eventually consistent, retry once after a short delay if empty
+    if not offers_json:
+        import time
+        time.sleep(1.5)
+        offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+
     except Exception as e:
         print(f"[direct_only] error listing offers: {e}")
         return []
