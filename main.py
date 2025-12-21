@@ -1221,7 +1221,7 @@ def fetch_direct_only_offers(
         "data": {
             "slices": slices,
             "passengers": pax,
-            "cabin_class": cabin.lower(),
+            "cabin_class": cabin.lower().replace(" ", "_"),
             "max_connections": 0,
         }
     }
