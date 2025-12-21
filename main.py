@@ -978,7 +978,39 @@ def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
     )
 
     return max_pairs, max_offers_pair, max_offers_total
+def generate_date_pairs(params, max_pairs: int = 60):
+    """
+    Build (departure_date, return_date) pairs from the search window and stay rules.
 
+    Uses:
+      - params.earliestDeparture, params.latestDeparture
+      - params.minStayDays, params.maxStayDays
+      - caps to max_pairs and params.maxDatePairs (if present)
+    """
+    earliest = params.earliestDeparture
+    latest = params.latestDeparture
+    if not earliest or not latest or earliest > latest:
+        return []
+
+    min_stay = max(0, int(getattr(params, "minStayDays", 0) or 0))
+    max_stay = max(min_stay, int(getattr(params, "maxStayDays", min_stay) or min_stay))
+
+    # Respect any param cap if it exists
+    param_cap = getattr(params, "maxDatePairs", None)
+    if isinstance(param_cap, int) and param_cap > 0:
+        max_pairs = min(max_pairs, param_cap)
+
+    pairs = []
+    dep = earliest
+    while dep <= latest and len(pairs) < max_pairs:
+        for stay in range(min_stay, max_stay + 1):
+            ret = dep + timedelta(days=stay)
+            pairs.append((dep, ret))
+            if len(pairs) >= max_pairs:
+                break
+        dep = dep + timedelta(days=1)
+
+    return pairs
 
 def estimate_date_pairs(params: SearchParams) -> int:
     max_pairs, _, _ = effective_caps(params)
