@@ -1377,7 +1377,7 @@ def run_search_job(job_id: str):
                         # Keep your existing "stricter per-pair cap" behavior.
                         # If apply_global_airline_cap is truly global-only in semantics, it still works
                         # as a final safeguard inside this curated list.
-                        balanced_pair = apply_global_airline_cap(balanced_pair, max_share=0.3)
+                        balanced_pair = apply_global_airline_cap(balanced_pair, max_share=per_pair_airline_cap_pct)
 
                         try:
                             direct_taken = sum(1 for o in balanced_pair if _is_direct(o))
