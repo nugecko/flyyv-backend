@@ -675,12 +675,14 @@ def duffel_post(path: str, payload: dict) -> dict:
             or resp.headers.get("X-Request-Id")
             or resp.headers.get("X-Correlation-Id")
         )
+        safe_body = (resp.text or "")
+        safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
         logger.warning(
             "Duffel POST %s status=%s request_id=%s body=%s",
             path,
             resp.status_code,
             request_id,
-            (resp.text or "")[:4000],
+            safe_body[:2000],
         )
     except Exception:
         pass
