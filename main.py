@@ -188,7 +188,39 @@ class SearchParams(BaseModel):
     maxOffersTotal: int = 10000
     maxDatePairs: int = 60
 
-    fullCoverage: bool = True
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CabinClass(str, Enum):
+    ECONOMY = "ECONOMY"
+    PREMIUM_ECONOMY = "PREMIUM_ECONOMY"
+    BUSINESS = "BUSINESS"
+    FIRST = "FIRST"
+
+
+class CabinSummary(str, Enum):
+    ECONOMY = "ECONOMY"
+    PREMIUM_ECONOMY = "PREMIUM_ECONOMY"
+    BUSINESS = "BUSINESS"
+    FIRST = "FIRST"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+class SearchJob(BaseModel):
+    id: str
+    status: JobStatus
+    created_at: datetime
+    updated_at: datetime
+    params: SearchParams
+    total_pairs: int = 0
+    processed_pairs: int = 0
+    error: Optional[str] = None
 
 
 class FlightOption(BaseModel):
@@ -200,6 +232,10 @@ class FlightOption(BaseModel):
     departureDate: str
     returnDate: str
     stops: int
+
+    cabinSummary: Optional[CabinSummary] = None
+    cabinHighest: Optional[CabinClass] = None
+    cabinByDirection: Optional[Dict[str, Optional[CabinSummary]]] = None
 
     durationMinutes: int
     totalDurationMinutes: Optional[int] = None
@@ -223,31 +259,10 @@ class FlightOption(BaseModel):
     url: Optional[str] = None
 
 
-class CreditUpdateRequest(BaseModel):
-    userId: str
-    amount: Optional[int] = None
-    delta: Optional[int] = None
-    creditAmount: Optional[int] = None
-    value: Optional[int] = None
-    reason: Optional[str] = None
-
-
-class JobStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class SearchJob(BaseModel):
-    id: str
+class SearchStartResponse(BaseModel):
     status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    params: SearchParams
-    total_pairs: int = 0
-    processed_pairs: int = 0
-    error: Optional[str] = None
+    mode: str
+    jobId: str
 
 
 class SearchStatusResponse(BaseModel):
@@ -256,9 +271,9 @@ class SearchStatusResponse(BaseModel):
     processedPairs: int
     totalPairs: int
     progress: float
-    error: Optional[str] = None
-    previewCount: int = 0
-    previewOptions: List[FlightOption] = Field(default_factory=list)
+    error: Optional[str]
+    previewCount: int
+    previewOptions: List[FlightOption]
 
 
 class SearchResultsResponse(BaseModel):
@@ -280,18 +295,98 @@ class UserSyncPayload(BaseModel):
     source: Optional[str] = None
 
 
+class PublicUser(BaseModel):
+    id: str
+    external_id: Optional[str] = None
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    country: Optional[str] = None
+    marketing_consent: Optional[bool] = None
+    source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AdminConfigResponse(BaseModel):
+    key: str
+    value: str
+    updated_at: Optional[datetime] = None
+
+
+class AdminConfigUpdatePayload(BaseModel):
+    value: str
+
+
+class EarlyAccessCreatePayload(BaseModel):
+    email: str
+
+
+class EarlyAccessResponse(BaseModel):
+    email: str
+    created_at: datetime
+
+
+class AlertBase(BaseModel):
+    email: str
+    origin: str
+    destination: str
+    cabin: str
+    search_mode: Optional[str] = "flexible"
+    preferred_days: Optional[List[int]] = None
+    max_price: Optional[int] = None
+    min_days: Optional[int] = None
+    max_days: Optional[int] = None
+    notes: Optional[str] = None
+    currency: Optional[str] = "GBP"
+
+
+class AlertCreatePayload(AlertBase):
+    pass
+
+
+class AlertUpdatePayload(BaseModel):
+    is_active: Optional[bool] = None
+    preferred_days: Optional[List[int]] = None
+    max_price: Optional[int] = None
+    min_days: Optional[int] = None
+    max_days: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class AlertResponse(AlertBase):
+    id: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class AlertRunResponse(BaseModel):
+    id: str
+    alert_id: str
+    ran_at: datetime
+    matches_count: int
+    min_price_found: Optional[int] = None
+    max_price_found: Optional[int] = None
+    currency: Optional[str] = "GBP"
+
+    class Config:
+        orm_mode = True
+
+
 class ProfileUser(BaseModel):
     id: str
-    name: Optional[str] = None
-    email: Optional[str] = None
-    plan: Optional[str] = None
+    email: str
+    credits: int
 
 
 class SubscriptionInfo(BaseModel):
     plan: str
-    billingCycle: Optional[str] = None
-    renewalDate: Optional[str] = None
-    monthlyCredits: int = 0
+    status: str
+    renews_on: Optional[str] = None
 
 
 class WalletInfo(BaseModel):
@@ -312,61 +407,7 @@ class PublicConfig(BaseModel):
     maxPassengers: int
 
 
-class AlertUpdatePayload(BaseModel):
-    alert_type: Optional[str] = None
-    max_price: Optional[int] = None
-    is_active: Optional[bool] = None
-    departure_start: Optional[date] = None
-    departure_end: Optional[date] = None
-    return_start: Optional[date] = None
-    return_end: Optional[date] = None
-    mode: Optional[str] = None
-
-    # NEW: allow updates for passengers (safe, defaults handled)
-    passengers: Optional[int] = None
-    number_of_passengers: Optional[int] = None
-
-
-class AlertStatusPayload(BaseModel):
-    is_active: Optional[bool] = None
-    isActive: Optional[bool] = None
-
-
-class AlertBase(BaseModel):
-    email: str
-    origin: str
-    destination: str
-    cabin: str
-    search_mode: Optional[str] = "flexible"
-
-    departure_start: date
-    departure_end: date
-    return_start: Optional[date] = None
-    return_end: Optional[date] = None
-
-    alert_type: str
-    max_price: Optional[int] = None
-
-    # single = specific date pair
-    # smart  = smart search / date window
-    mode: Optional[str] = "single"
-
-    # NEW: passengers on alert
-    passengers: int = 1
-
-
-class AlertCreate(AlertBase):
-    pass
-
-
-class AlertOut(AlertBase):
-    id: str
-    times_sent: int
-    is_active: bool
-
-    # Last observed price from the most recent check (per passenger)
-    last_price: Optional[int] = None
-
+class AlertWithStatsResponse(AlertResponse):
     # Computed from AlertRun history (min price_found)
     best_price: Optional[int] = None
 
@@ -384,7 +425,6 @@ class AlertOut(AlertBase):
 # =====================================================================
 # SECTION END: Pydantic MODELS
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: FastAPI APP AND CORS
@@ -410,7 +450,6 @@ app.include_router(early_access_router)
 # =====================================================================
 # SECTION END: FastAPI APP AND CORS
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: ENV, DUFFEL AND EMAIL CONFIG
@@ -454,7 +493,6 @@ ALERTS_ENABLED = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
 # SECTION END: ENV, DUFFEL AND EMAIL CONFIG
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: IN MEMORY STORES
 # =====================================================================
@@ -471,97 +509,82 @@ JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 # SECTION START: DUFFEL HELPERS
 # =====================================================================
 
-def duffel_headers() -> dict:
-    return {
-        "Authorization": f"Bearer {DUFFEL_ACCESS_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Duffel-Version": DUFFEL_VERSION,
-    }
-
-
-def generate_date_pairs(params: SearchParams, max_pairs: int = 60) -> List[Tuple[date, date]]:
-    pairs: List[Tuple[date, date]] = []
-
-    min_stay = max(1, params.minStayDays)
-    max_stay = max(min_stay, params.maxStayDays)
-
-    if params.earliestDeparture == params.latestDeparture and min_stay == max_stay:
-        dep = params.earliestDeparture
-        ret = dep + timedelta(days=min_stay)
-        pairs.append((dep, ret))
-        return pairs[:max_pairs]
-
-    stays = list(range(min_stay, max_stay + 1))
-
-    for stay in stays:
-        current = params.earliestDeparture
-        while current <= params.latestDeparture and len(pairs) < max_pairs:
-            ret = current + timedelta(days=stay)
-            if ret <= params.latestDeparture:
-                pairs.append((current, ret))
-            current += timedelta(days=1)
-
-        if len(pairs) >= max_pairs:
-            break
-
-    return pairs
-
-
-def duffel_create_offer_request(
-    slices: List[dict],
-    passengers: List[dict],
-    cabin_class: str,
-) -> dict:
-    if not DUFFEL_ACCESS_TOKEN:
-        raise HTTPException(status_code=500, detail="Duffel not configured")
-
-    url = f"{DUFFEL_API_BASE}/air/offer_requests"
-    payload = {
-        "data": {
-            "slices": slices,
-            "passengers": passengers,
-            "cabin_class": cabin_class.lower(),
-        }
-    }
-
-    resp = requests.post(url, json=payload, headers=duffel_headers(), timeout=25)
-    if resp.status_code >= 400:
-        print("Duffel offer_requests error:", resp.status_code, resp.text)
-        raise HTTPException(status_code=502, detail="Duffel API error")
-
-    body = resp.json()
-    return body.get("data", {})
-
-
-def duffel_list_offers(offer_request_id: str, limit: int = 300) -> List[dict]:
-    url = f"{DUFFEL_API_BASE}/air/offers"
-    params = {
-        "offer_request_id": offer_request_id,
-        "limit": min(limit, 300),
-        "sort": "total_amount",
-    }
-
-    resp = requests.get(url, params=params, headers=duffel_headers(), timeout=25)
-    if resp.status_code >= 400:
-        print("Duffel offers error:", resp.status_code, resp.text)
-        raise HTTPException(status_code=502, detail="Duffel API error")
-
-    body = resp.json()
-    data = body.get("data", [])
-    return list(data)[:limit]
-
-
-def build_iso_duration(minutes: int) -> str:
-    if minutes <= 0:
-        return "PT0M"
-    hours = minutes // 60
-    mins = minutes % 60
+def iso8601_duration(minutes: int) -> str:
+    mins = max(0, int(minutes or 0))
+    hours = mins // 60
+    mins = mins % 60
     if hours and mins:
         return f"PT{hours}H{mins}M"
     if hours:
         return f"PT{hours}H"
     return f"PT{mins}M"
+
+
+CABIN_RANK = {
+    "ECONOMY": 1,
+    "PREMIUM_ECONOMY": 2,
+    "BUSINESS": 3,
+    "FIRST": 4,
+}
+
+
+def normalize_cabin(raw: Optional[str]) -> Optional[CabinClass]:
+    if not raw:
+        return None
+    val = str(raw).strip().upper().replace(" ", "_")
+    if val in ("ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"):
+        return CabinClass(val)
+    return None
+
+
+def extract_segment_cabin(seg: dict) -> Optional[CabinClass]:
+    # Duffel commonly provides cabin at passenger level, but we defensively check multiple shapes
+    passengers = seg.get("passengers") or []
+    if isinstance(passengers, list) and passengers:
+        p0 = passengers[0] or {}
+        cabin = p0.get("cabin_class") or p0.get("cabin") or p0.get("cabinClass")
+        norm = normalize_cabin(cabin)
+        if norm:
+            return norm
+
+    cabin = seg.get("cabin_class") or seg.get("cabin") or seg.get("cabinClass")
+    return normalize_cabin(cabin)
+
+
+def extract_segment_booking_code(seg: dict) -> Optional[str]:
+    passengers = seg.get("passengers") or []
+    if isinstance(passengers, list) and passengers:
+        p0 = passengers[0] or {}
+        code = p0.get("booking_code") or p0.get("bookingCode")
+        if code:
+            return str(code)
+    code = seg.get("booking_code") or seg.get("bookingCode")
+    return str(code) if code else None
+
+
+def extract_segment_fare_brand(seg: dict) -> Optional[str]:
+    passengers = seg.get("passengers") or []
+    if isinstance(passengers, list) and passengers:
+        p0 = passengers[0] or {}
+        brand = p0.get("fare_brand_name") or p0.get("fareBrand") or p0.get("fare_brand")
+        if brand:
+            return str(brand)
+    brand = seg.get("fare_brand_name") or seg.get("fareBrand") or seg.get("fare_brand")
+    return str(brand) if brand else None
+
+
+def summarize_cabins(cabins: List[Optional[CabinClass]]) -> Tuple[CabinSummary, Optional[CabinClass]]:
+    # If any segment is missing cabin, do not guess
+    if any(c is None for c in cabins) or not cabins:
+        return CabinSummary.UNKNOWN, None
+
+    unique = {c.value for c in cabins if c is not None}
+    if len(unique) == 1:
+        single = cabins[0]
+        return CabinSummary(single.value), single
+
+    highest = max((c for c in cabins if c is not None), key=lambda c: CABIN_RANK.get(c.value, 0))
+    return CabinSummary.MIXED, highest
 
 
 def map_duffel_offer_to_option(
@@ -614,6 +637,7 @@ def map_duffel_offer_to_option(
 
         origin_code = origin_obj.get("iata_code")
         destination_code = dest_obj.get("iata_code")
+
         origin_airport = origin_obj.get("name")
         destination_airport = dest_obj.get("name")
 
@@ -675,18 +699,22 @@ def map_duffel_offer_to_option(
                     except Exception:
                         layover_minutes_to_next = None
 
-            if duration_minutes_seg is None:
-                duration_minutes_seg = 0
+            if duration_minutes_seg:
+                total_minutes += duration_minutes_seg
+            if layover_minutes_to_next:
+                total_minutes += layover_minutes_to_next
 
-            total_minutes_local = duration_minutes_seg
-            total_minutes += total_minutes_local
+            seg_cabin = extract_segment_cabin(seg)
 
             result.append(
                 {
                     "direction": direction,
+                    "flightNumber": seg.get("marketing_carrier_flight_number"),
+                    "marketingCarrier": (seg.get("marketing_carrier") or {}).get("iata_code"),
+                    "operatingCarrier": (seg.get("operating_carrier") or {}).get("iata_code"),
                     "origin": o.get("iata_code"),
-                    "originAirport": o.get("name"),
                     "destination": d.get("iata_code"),
+                    "originAirport": o.get("name"),
                     "destinationAirport": d.get("name"),
                     "departingAt": dep_at_str,
                     "arrivingAt": arr_at_str,
@@ -694,6 +722,9 @@ def map_duffel_offer_to_option(
                     "aircraftName": aircraft_name,
                     "durationMinutes": duration_minutes_seg,
                     "layoverMinutesToNext": layover_minutes_to_next,
+                    "cabin": (seg_cabin.value if seg_cabin else None),
+                    "bookingCode": extract_segment_booking_code(seg),
+                    "fareBrand": extract_segment_fare_brand(seg),
                 }
             )
 
@@ -702,26 +733,34 @@ def map_duffel_offer_to_option(
     outbound_segments_info, outbound_total_minutes = process_segment_list("outbound", outbound_segments_json)
     return_segments_info, return_total_minutes = process_segment_list("return", return_segments_json)
 
+    # Cabin source of truth: derive from segment cabins, never guess
+    outbound_cabins = [normalize_cabin(seg.get("cabin")) for seg in outbound_segments_info] if outbound_segments_info else []
+    return_cabins = [normalize_cabin(seg.get("cabin")) for seg in return_segments_info] if return_segments_info else []
+    all_cabins = outbound_cabins + return_cabins
+
+    cabin_summary, cabin_highest = summarize_cabins(all_cabins)
+
+    cabin_by_direction: Optional[Dict[str, Optional[CabinSummary]]] = None
+    if outbound_segments_info or return_segments_info:
+        outbound_summary, _ = summarize_cabins(outbound_cabins) if outbound_segments_info else (CabinSummary.UNKNOWN, None)
+        return_summary, _ = summarize_cabins(return_cabins) if return_segments_info else (CabinSummary.UNKNOWN, None)
+        cabin_by_direction = {"outbound": outbound_summary, "return": return_summary}
+
     duration_minutes = outbound_total_minutes
-
-    if outbound_total_minutes or return_total_minutes:
-        total_duration_minutes = outbound_total_minutes + return_total_minutes
-    else:
-        total_duration_minutes = duration_minutes
-
-    iso_duration = build_iso_duration(duration_minutes)
+    total_duration_minutes = outbound_total_minutes + return_total_minutes
+    iso_duration = iso8601_duration(total_duration_minutes)
 
     stopover_codes: List[str] = []
     stopover_airports: List[str] = []
-    if len(outbound_segments_json) > 1:
+
+    if stops_outbound > 0 and outbound_segments_json:
         for seg in outbound_segments_json[:-1]:
-            dest_obj = seg.get("destination", {}) or {}
-            code = dest_obj.get("iata_code")
-            name = dest_obj.get("name")
-            if code:
-                stopover_codes.append(code)
-            if name:
-                stopover_airports.append(name)
+            dest = (seg.get("destination") or {}).get("iata_code")
+            dest_name = (seg.get("destination") or {}).get("name")
+            if dest:
+                stopover_codes.append(dest)
+            if dest_name:
+                stopover_airports.append(dest_name)
 
     return FlightOption(
         id=offer.get("id", ""),
@@ -732,6 +771,9 @@ def map_duffel_offer_to_option(
         departureDate=dep.isoformat(),
         returnDate=ret.isoformat(),
         stops=stops_outbound,
+        cabinSummary=cabin_summary,
+        cabinHighest=cabin_highest,
+        cabinByDirection=cabin_by_direction,
         durationMinutes=duration_minutes,
         totalDurationMinutes=total_duration_minutes,
         duration=iso_duration,
