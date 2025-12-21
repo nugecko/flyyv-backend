@@ -643,7 +643,7 @@ def duffel_post(path: str, payload: dict) -> dict:
     Minimal Duffel POST helper, used by duffel_create_offer_request.
     Requires DUFFEL_API_TOKEN to be set in environment.
     """
-    token = (os.getenv("DUFFEL_API_TOKEN") or "").strip()
+    token = (os.getenv("DUFFEL_API_TOKEN") or os.getenv("DUFFEL_ACCESS_TOKEN") or "").strip()
     if not token:
         raise HTTPException(status_code=500, detail="DUFFEL_API_TOKEN is not configured")
 
@@ -1243,8 +1243,16 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
                 continue
 
             per_pair_limit = min(max_offers_pair, max_offers_total - total_count)
-            print(f"[search] listing offers for request_id={offer_request_id} per_pair_limit={per_pair_limit}")
-            offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+
+            # Duffel can return offers inline on offer_request creation.
+            # Prefer inline offers to avoid an extra API call and any account limitations on /offers.
+            offers_json = offer_request.get("offers") or []
+            if offers_json:
+                print(f"[search] Duffel offer_request returned {len(offers_json)} inline offers for dep={dep} ret={ret}")
+                offers_json = offers_json[:per_pair_limit]
+            else:
+                print(f"[search] listing offers for request_id={offer_request_id} per_pair_limit={per_pair_limit}")
+                offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
         except HTTPException as e:
             print(f"[search] Duffel HTTPException for dep={dep} ret={ret}: {e.detail}")
             continue
