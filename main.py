@@ -1227,10 +1227,11 @@ def fetch_direct_only_offers(
     }
 
     try:
-    data = duffel_post("/air/offer_requests", payload)
+        data = duffel_post("/air/offer_requests", payload)
     except Exception as e:
-    print(f"[direct_only] error creating request: {e}")
-    return []
+        print(f"[direct_only] error creating request: {e}")
+        return []
+        
     # duffel_post already raises on non-200s, so if we are here, we have data
 
     body = resp.json()
