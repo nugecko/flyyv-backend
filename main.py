@@ -794,6 +794,40 @@ def duffel_create_offer_request(slices: List[dict], passengers: List[dict], cabi
 
     # IMPORTANT: if your project uses a different helper name, update this call.
     return duffel_post("/air/offer_requests", payload)
+    
+    # [duffel] offer_request summary log (micro-step)
+    try:
+        data = (resp_json or {}).get("data") or {}
+        warnings = (resp_json or {}).get("warnings") or data.get("warnings") or []
+        errors = (resp_json or {}).get("errors") or data.get("errors") or []
+
+        offer_request_id = data.get("id") or data.get("offer_request_id") or "UNKNOWN"
+        cabin_ack = data.get("cabin_class") or ((data.get("cabin") or {}).get("cabin_class")) or "UNKNOWN"
+
+        # Duffel sometimes includes offers inline, often it does not. We count safely either way.
+        inline_offers = data.get("offers") or []
+        inline_offers_count = len(inline_offers) if isinstance(inline_offers, list) else 0
+
+        slices = data.get("slices") or []
+        if slices and isinstance(slices, list):
+            s0 = slices[0] or {}
+            o = s0.get("origin") or {}
+            d = s0.get("destination") or {}
+            origin_type = o.get("type") or "UNKNOWN"
+            dest_type = d.get("type") or "UNKNOWN"
+        else:
+            origin_type = "UNKNOWN"
+            dest_type = "UNKNOWN"
+
+        print(
+            f'[duffel] offer_request id={offer_request_id} '
+            f'inline_offers={inline_offers_count} '
+            f'cabin_ack={cabin_ack} '
+            f'origin_type={origin_type} destination_type={dest_type} '
+            f'warnings={len(warnings)} errors={len(errors)}'
+        )
+    except Exception as e:
+        print(f"[duffel] offer_request summary log failed: {e}")
 
 def map_duffel_offer_to_option(
     offer: dict,
