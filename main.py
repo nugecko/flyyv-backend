@@ -640,15 +640,14 @@ def summarize_cabins(cabins: List[Optional[CabinClass]]) -> Tuple[CabinSummary, 
 
 def duffel_post(path: str, payload: dict) -> dict:
     """
-    Minimal Duffel POST helper, used by duffel_create_offer_request.
-    Requires DUFFEL_API_TOKEN to be set in environment.
+    Minimal Duffel POST helper.
+    Uses DUFFEL_API_TOKEN, falls back to DUFFEL_ACCESS_TOKEN.
     """
     token = (os.getenv("DUFFEL_API_TOKEN") or os.getenv("DUFFEL_ACCESS_TOKEN") or "").strip()
     if not token:
-        raise HTTPException(status_code=500, detail="DUFFEL_API_TOKEN is not configured")
+        raise HTTPException(status_code=500, detail="Duffel token is not configured")
 
     url = "https://api.duffel.com" + path
-
     headers = {
         "Authorization": f"Bearer {token}",
         "Duffel-Version": "v2",
@@ -660,7 +659,7 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
 
-        # Duffel often returns useful JSON error details
+    # Try to decode JSON (Duffel returns useful error bodies)
     try:
         data = resp.json()
     except Exception:
@@ -686,10 +685,19 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception:
         pass
 
-    def duffel_get(path: str, params: Optional[dict] = None) -> dict:
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=data)
+
+    # Most Duffel responses are {"data": ...}
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    return data
+
+
+def duffel_get(path: str, params: Optional[dict] = None) -> dict:
     """
-    Minimal Duffel GET helper, used by duffel_list_offers (and any other reads).
-    Supports either DUFFEL_API_TOKEN or DUFFEL_ACCESS_TOKEN.
+    Minimal Duffel GET helper.
+    Uses DUFFEL_API_TOKEN, falls back to DUFFEL_ACCESS_TOKEN.
     """
     token = (os.getenv("DUFFEL_API_TOKEN") or os.getenv("DUFFEL_ACCESS_TOKEN") or "").strip()
     if not token:
@@ -712,11 +720,30 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception:
         data = {"raw": resp.text}
 
+    # Optional debug log
+    try:
+        import logging
+        logger = logging.getLogger("duffel")
+        request_id = (
+            resp.headers.get("Request-Id")
+            or resp.headers.get("Duffel-Request-Id")
+            or resp.headers.get("X-Request-Id")
+            or resp.headers.get("X-Correlation-Id")
+        )
+        logger.warning(
+            "Duffel GET %s status=%s request_id=%s body=%s",
+            path,
+            resp.status_code,
+            request_id,
+            (resp.text or "")[:4000],
+        )
+    except Exception:
+        pass
+
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
 
     return data
-
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
