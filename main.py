@@ -699,7 +699,7 @@ def duffel_list_offers(offer_request_id: str, limit: int = 100) -> List[dict]:
     """
     Returns a list of offers for a given offer_request_id.
     """
-    res = duffel_get("/offers", params={"offer_request_id": offer_request_id, "limit": int(limit)})
+    res = duffel_get("/air/offers", params={"offer_request_id": offer_request_id, "limit": int(limit)})
     data = res.get("data") if isinstance(res, dict) else None
     return data or []
 
@@ -732,7 +732,7 @@ def duffel_create_offer_request(slices: List[dict], passengers: List[dict], cabi
         payload["data"]["cabin_class"] = duffel_cabin
 
     # IMPORTANT: if your project uses a different helper name, update this call.
-    return duffel_post("/offer_requests", payload)
+    return duffel_post("/air/offer_requests", payload)
 
 def map_duffel_offer_to_option(
     offer: dict,
