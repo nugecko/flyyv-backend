@@ -644,6 +644,36 @@ def summarize_cabins(cabins: List[Optional[CabinClass]]) -> Tuple[CabinSummary, 
     highest = max((c for c in cabins if c is not None), key=lambda c: CABIN_RANK.get(c.value, 0))
     return CabinSummary.MIXED, highest
 
+def duffel_create_offer_request(slices: List[dict], passengers: List[dict], cabin: str) -> dict:
+    """
+    Creates a Duffel offer request and returns the JSON response.
+    Expects you already have a low-level Duffel POST helper in this file, typically:
+      - duffel_post(path: str, payload: dict) -> dict
+    If your helper has a different name, change duffel_post below to match it.
+    """
+    cabin_val = (cabin or "").strip().upper().replace(" ", "_")
+
+    # Duffel expects: economy, premium_economy, business, first
+    cabin_map = {
+        "ECONOMY": "economy",
+        "PREMIUM_ECONOMY": "premium_economy",
+        "BUSINESS": "business",
+        "FIRST": "first",
+    }
+    duffel_cabin = cabin_map.get(cabin_val)
+
+    payload: Dict[str, Any] = {
+        "data": {
+            "slices": slices,
+            "passengers": passengers,
+        }
+    }
+
+    if duffel_cabin:
+        payload["data"]["cabin_class"] = duffel_cabin
+
+    # IMPORTANT: if your project uses a different helper name, update this call.
+    return duffel_post("/offer_requests", payload)
 
 def map_duffel_offer_to_option(
     offer: dict,
