@@ -686,6 +686,38 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception:
         pass
 
+    def duffel_get(path: str, params: Optional[dict] = None) -> dict:
+    """
+    Minimal Duffel GET helper, used by duffel_list_offers (and any other reads).
+    Supports either DUFFEL_API_TOKEN or DUFFEL_ACCESS_TOKEN.
+    """
+    token = (os.getenv("DUFFEL_API_TOKEN") or os.getenv("DUFFEL_ACCESS_TOKEN") or "").strip()
+    if not token:
+        raise HTTPException(status_code=500, detail="Duffel token is not configured")
+
+    url = "https://api.duffel.com" + path
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Duffel-Version": "v2",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params or {}, timeout=45)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=data)
+
+    return data
+
+
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
 
