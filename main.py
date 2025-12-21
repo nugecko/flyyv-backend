@@ -172,6 +172,15 @@ def get_config_bool(key: str, default_value: bool) -> bool:
 # SECTION START: Pydantic MODELS
 # =====================================================================
 
+class CreditUpdateRequest(BaseModel):
+    userId: str
+
+    # Accept any of these keys from the admin UI/tooling
+    delta: Optional[int] = None
+    amount: Optional[int] = None
+    creditAmount: Optional[int] = None
+    value: Optional[int] = None
+
 class SearchParams(BaseModel):
     origin: str
     destination: str
