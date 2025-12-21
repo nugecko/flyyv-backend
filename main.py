@@ -172,6 +172,56 @@ def get_config_bool(key: str, default_value: bool) -> bool:
 # SECTION START: Pydantic MODELS
 # =====================================================================
 
+class AlertCreate(BaseModel):
+    email: str
+    origin: str
+    destination: str
+    cabin: str
+
+    search_mode: Optional[str] = "flexible"  # "flexible" or "fixed"
+    departure_start: Optional[date] = None
+    departure_end: Optional[date] = None
+    return_start: Optional[date] = None
+    return_end: Optional[date] = None
+
+    alert_type: Optional[str] = None
+    max_price: Optional[int] = None
+
+    mode: Optional[str] = "single"  # "single" or "smart"
+    passengers: Optional[int] = 1
+
+
+class AlertOut(BaseModel):
+    id: str
+    email: str
+    origin: str
+    destination: str
+    cabin: str
+    search_mode: str
+
+    departure_start: Optional[date] = None
+    departure_end: Optional[date] = None
+    return_start: Optional[date] = None
+    return_end: Optional[date] = None
+
+    alert_type: Optional[str] = None
+    max_price: Optional[int] = None
+    mode: str
+
+    passengers: int
+    times_sent: int
+    is_active: bool
+
+    last_price: Optional[int] = None
+    best_price: Optional[int] = None
+
+    last_run_at: Optional[datetime] = None
+    last_notified_at: Optional[datetime] = None
+    last_notified_price: Optional[int] = None
+
+    created_at: datetime
+    updated_at: datetime
+
 class CreditUpdateRequest(BaseModel):
     userId: str
 
@@ -210,7 +260,6 @@ class CabinClass(str, Enum):
     PREMIUM_ECONOMY = "PREMIUM_ECONOMY"
     BUSINESS = "BUSINESS"
     FIRST = "FIRST"
-
 
 class CabinSummary(str, Enum):
     ECONOMY = "ECONOMY"
