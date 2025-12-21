@@ -1251,7 +1251,7 @@ def fetch_direct_only_offers(
     ]
 
     # Micro-step: force city origins to airport IATA for Duffel
-   for s in slices:
+    for s in slices:
        o = s.get("origin") or {}
        if o.get("type") == "city":
            airports = o.get("airports") or []
