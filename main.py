@@ -577,14 +577,12 @@ def iso8601_duration(minutes: int) -> str:
         return f"PT{hours}H"
     return f"PT{mins}M"
 
-
 CABIN_RANK = {
     "ECONOMY": 1,
     "PREMIUM_ECONOMY": 2,
     "BUSINESS": 3,
     "FIRST": 4,
 }
-
 
 def normalize_cabin(raw: Optional[str]) -> Optional[CabinClass]:
     if not raw:
@@ -593,7 +591,6 @@ def normalize_cabin(raw: Optional[str]) -> Optional[CabinClass]:
     if val in ("ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"):
         return CabinClass(val)
     return None
-
 
 def extract_segment_cabin(seg: dict) -> Optional[CabinClass]:
     # Duffel commonly provides cabin at passenger level, but we defensively check multiple shapes
@@ -608,7 +605,6 @@ def extract_segment_cabin(seg: dict) -> Optional[CabinClass]:
     cabin = seg.get("cabin_class") or seg.get("cabin") or seg.get("cabinClass")
     return normalize_cabin(cabin)
 
-
 def extract_segment_booking_code(seg: dict) -> Optional[str]:
     passengers = seg.get("passengers") or []
     if isinstance(passengers, list) and passengers:
@@ -619,7 +615,6 @@ def extract_segment_booking_code(seg: dict) -> Optional[str]:
     code = seg.get("booking_code") or seg.get("bookingCode")
     return str(code) if code else None
 
-
 def extract_segment_fare_brand(seg: dict) -> Optional[str]:
     passengers = seg.get("passengers") or []
     if isinstance(passengers, list) and passengers:
@@ -629,7 +624,6 @@ def extract_segment_fare_brand(seg: dict) -> Optional[str]:
             return str(brand)
     brand = seg.get("fare_brand_name") or seg.get("fareBrand") or seg.get("fare_brand")
     return str(brand) if brand else None
-
 
 def summarize_cabins(cabins: List[Optional[CabinClass]]) -> Tuple[CabinSummary, Optional[CabinClass]]:
     # If any segment is missing cabin, do not guess
@@ -666,11 +660,31 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
 
-    # Duffel often returns useful JSON error details
+        # Duffel often returns useful JSON error details
     try:
         data = resp.json()
     except Exception:
         data = {"raw": resp.text}
+
+    # Log response details for debugging (never log the token)
+    try:
+        import logging
+        logger = logging.getLogger("duffel")
+        request_id = (
+            resp.headers.get("Request-Id")
+            or resp.headers.get("Duffel-Request-Id")
+            or resp.headers.get("X-Request-Id")
+            or resp.headers.get("X-Correlation-Id")
+        )
+        logger.warning(
+            "Duffel POST %s status=%s request_id=%s body=%s",
+            path,
+            resp.status_code,
+            request_id,
+            (resp.text or "")[:4000],
+        )
+    except Exception:
+        pass
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
@@ -678,33 +692,6 @@ def duffel_post(path: str, payload: dict) -> dict:
     # Duffel responses are usually { "data": {...} }
     if isinstance(data, dict) and "data" in data:
         return data["data"]
-    return data
-def duffel_get(path: str, params: Optional[dict] = None) -> dict:
-    token = (os.getenv("DUFFEL_API_TOKEN") or "").strip()
-    if not token:
-        raise HTTPException(status_code=500, detail="DUFFEL_API_TOKEN is not configured")
-
-    url = "https://api.duffel.com" + path
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Duffel-Version": "v2",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        resp = requests.get(url, headers=headers, params=params or {}, timeout=45)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
-
-    try:
-        data = resp.json()
-    except Exception:
-        data = {"raw": resp.text}
-
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=data)
-
     return data
 
 
