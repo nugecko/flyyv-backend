@@ -293,7 +293,6 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
 # SECTION END: ONE OFF ALERT EMAIL
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: SMART ALERT SUMMARY EMAIL
 # =====================================================================
@@ -322,7 +321,50 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 
     passengers = _derive_passengers(alert=alert, params=params)
     passenger_text = _passengers_label(passengers)  # "1 passenger" / "2 passengers"
-    cabin_title = str(cabin).title()  # "Business"
+
+    # =================================================================
+    # SECTION START: USER FACING DISPLAY LABELS
+    # =================================================================
+
+    def _cabin_display_label(c) -> str:
+        """
+        Prevent internal enum/slug values leaking into user facing copy.
+        Examples:
+        PREMIUM_ECONOMY -> Premium Economy
+        BUSINESS -> Business Class
+        """
+        raw = str(c or "").strip()
+        raw_upper = raw.upper()
+
+        mapping = {
+            "ECONOMY": "Economy",
+            "PREMIUM_ECONOMY": "Premium Economy",
+            "BUSINESS": "Business Class",
+            "FIRST": "First Class",
+        }
+        if raw_upper in mapping:
+            return mapping[raw_upper]
+
+        # Fallback: turn underscores into spaces and Title Case it
+        # Example: "PREMIUM ECONOMY" or "Premium_Economy" -> "Premium Economy"
+        raw_clean = raw.replace("_", " ").strip()
+        if not raw_clean:
+            return "Business Class"
+        return raw_clean.title()
+
+    def _cabin_pill_label(c) -> str:
+        """
+        Pill badge label, keep it short and consistent, no underscores.
+        """
+        # Use the same display label, but in uppercase for pill style.
+        return _cabin_display_label(c).upper()
+
+    cabin_title = _cabin_display_label(cabin)          # "Premium Economy" / "Business Class"
+    cabin_pill = _cabin_pill_label(cabin)              # "PREMIUM ECONOMY" / "BUSINESS CLASS"
+
+    # =================================================================
+    # SECTION END: USER FACING DISPLAY LABELS
+    # =================================================================
 
     grouped: Dict[Tuple[str, str], List] = {}
     for opt in options:
@@ -397,10 +439,13 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
 
-    # Plain text fallback
+    # ================================================================
+    # SECTION START: PLAIN TEXT FALLBACK
+    # ================================================================
+
     lines: List[str] = []
     lines.append("FlyyvFlex Smart Search Alert")
-    lines.append(f"Route: {origin} → {destination}, {cabin_title} class")
+    lines.append(f"Route: {origin} → {destination}, {cabin_title}")
     lines.append(f"Passengers: {passengers}")
     lines.append("Prices shown are per passenger")
     if nights_text:
@@ -441,7 +486,14 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     lines.append(open_full_results_url)
     msg.set_content("\n".join(lines))
 
-    # HTML
+    # ================================================================
+    # SECTION END: PLAIN TEXT FALLBACK
+    # ================================================================
+
+    # ================================================================
+    # SECTION START: ROWS HTML
+    # ================================================================
+
     rows_html = ""
     for p in top_pairs_sorted:
         dep_dt = datetime.fromisoformat(p["departureDate"])
@@ -468,11 +520,23 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         if within and threshold_int is not None:
             within_html = f'<span style="color:#059669;font-weight:700;">, within your £{threshold_int} price range</span>'
 
+        # ------------------------------------------------------------
+        # IMPORTANT LAYOUT FIX
+        # - Price + CTA previously looked "centered" because the right
+        #   column visually floated relative to the left text.
+        # - This version forces TOP alignment and LEFT alignment inside
+        #   the right column, so it reads as one cohesive row.
+        # ------------------------------------------------------------
+
         rows_html += f"""
           <tr>
             <td style="padding:14px 14px;border:1px solid #e6e8ee;border-radius:12px;background:#ffffff;display:block;margin-bottom:10px;">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
-                <div>
+
+                <!-- ============================================
+                SECTION START: LEFT SIDE (ROUTE, DATES, AIRLINE)
+                ============================================ -->
+                <div style="flex:1;min-width:0;">
                   <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:4px;">
                     {origin} → {destination}
                   </div>
@@ -484,19 +548,38 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                     {within_html}
                   </div>
                 </div>
-                <div style="text-align:right;min-width:140px;">
-                  <div style="font-size:18px;color:#111827;font-weight:800;">£{price_label}</div>
-                  <div style="font-size:12px;color:#6b7280;">per passenger</div>
-                  <div style="margin-top:6px;">
+                <!-- ============================================
+                SECTION END: LEFT SIDE
+                ============================================ -->
+
+                <!-- ============================================
+                SECTION START: RIGHT SIDE (PRICE + CTA)
+                ============================================ -->
+                <div style="min-width:150px;text-align:left;align-self:flex-start;">
+                  <div style="font-size:18px;color:#111827;font-weight:800;line-height:1.1;">£{price_label}</div>
+                  <div style="font-size:12px;color:#6b7280;margin-top:2px;">per passenger</div>
+                  <div style="margin-top:8px;">
                     <a href="{view_link}" style="font-size:13px;color:#2563eb;text-decoration:underline;font-weight:700;">
                       View flight
                     </a>
                   </div>
                 </div>
+                <!-- ============================================
+                SECTION END: RIGHT SIDE (PRICE + CTA)
+                ============================================ -->
+
               </div>
             </td>
           </tr>
         """
+
+    # ================================================================
+    # SECTION END: ROWS HTML
+    # ================================================================
+
+    # ================================================================
+    # SECTION START: CHIPS
+    # ================================================================
 
     best_chip = ""
     if best_price_overall is not None:
@@ -512,68 +595,161 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     </span>
     """
 
+    # ================================================================
+    # SECTION END: CHIPS
+    # ================================================================
+
+    # ================================================================
+    # SECTION START: HTML EMAIL TEMPLATE
+    # ================================================================
+
     html = f"""
     <html>
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:680px;margin:0 auto;padding:24px;">
+
+          <!-- =====================================================
+          SECTION START: EMAIL CONTAINER CARD
+          ====================================================== -->
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
-            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">FlyyvFlex Smart Search Alert</div>
 
-            <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
-              Top {cabin_title} class deals for {passenger_text} going from {origin} → {destination}
+            <!-- =====================================================
+            SECTION START: HEADER LABEL
+            ====================================================== -->
+            <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">
+              FlyyvFlex Smart Search Alert
             </div>
+            <!-- =====================================================
+            SECTION END: HEADER LABEL
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: MAIN TITLE
+            ====================================================== -->
+            <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
+              Top {cabin_title} deals for {passenger_text} going from {origin} → {destination}
+            </div>
+            <!-- =====================================================
+            SECTION END: MAIN TITLE
+            ====================================================== -->
+
+            <!-- =====================================================
+            SECTION START: WINDOW SUMMARY
+            ====================================================== -->
             <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
               Based on a scan of your <strong>{start_label} to {end_label}</strong> window
               {f" for <strong>{nights_text}-night</strong> trips" if nights_text else ""}.
             </div>
+            <!-- =====================================================
+            SECTION END: WINDOW SUMMARY
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: META DETAILS
+            ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 12px 0;">
               Passengers: <strong>{passenger_text}</strong><br>
               Prices shown are per passenger
             </div>
+            <!-- =====================================================
+            SECTION END: META DETAILS
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: CHIPS ROW
+            ====================================================== -->
             <div style="margin:0 0 16px 0;">
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:800;margin-right:8px;margin-bottom:8px;">
-                {str(cabin).upper()}
+                {cabin_pill}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {passenger_text}
               </span>
+
               {combos_chip}
               {best_chip}
             </div>
+            <!-- =====================================================
+            SECTION END: CHIPS ROW
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: DIVIDER
+            ====================================================== -->
             <div style="border-top:1px solid #eef0f5;margin:14px 0;"></div>
+            <!-- =====================================================
+            SECTION END: DIVIDER
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: TOP 5 HEADER
+            ====================================================== -->
             <div style="font-size:18px;color:#111827;font-weight:800;margin:0 0 12px 0;">
               Top 5 cheapest date combinations
             </div>
+            <!-- =====================================================
+            SECTION END: TOP 5 HEADER
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: TOP 5 TABLE
+            ====================================================== -->
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
               {rows_html if rows_html else '<tr><td style="color:#6b7280;font-size:14px;">No flights found in this scan.</td></tr>'}
             </table>
+            <!-- =====================================================
+            SECTION END: TOP 5 TABLE
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: PRIMARY CTA
+            ====================================================== -->
             <div style="margin:18px 0 0 0;">
               <a href="{open_full_results_url}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:800;font-size:15px;">
                 Open full results
               </a>
             </div>
+            <!-- =====================================================
+            SECTION END: PRIMARY CTA
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: FOOTNOTE
+            ====================================================== -->
             <div style="font-size:12px;color:#6b7280;line-height:1.4;margin-top:14px;">
               You are receiving this email because you created a FlyyvFlex Smart Search Alert.
               To stop these alerts, delete the alert in your Flyyv profile.
             </div>
-          </div>
+            <!-- =====================================================
+            SECTION END: FOOTNOTE
+            ====================================================== -->
 
+          </div>
+          <!-- =====================================================
+          SECTION END: EMAIL CONTAINER CARD
+          ====================================================== -->
+
+          <!-- =====================================================
+          SECTION START: OUTER FOOTER
+          ====================================================== -->
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
             Flyyv, <a href="{open_full_results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
           </div>
+          <!-- =====================================================
+          SECTION END: OUTER FOOTER
+          ====================================================== -->
+
         </div>
       </body>
     </html>
     """
+
+    # ================================================================
+    # SECTION END: HTML EMAIL TEMPLATE
+    # ================================================================
 
     msg.add_alternative(html, subtype="html")
 
