@@ -644,6 +644,78 @@ def summarize_cabins(cabins: List[Optional[CabinClass]]) -> Tuple[CabinSummary, 
     highest = max((c for c in cabins if c is not None), key=lambda c: CABIN_RANK.get(c.value, 0))
     return CabinSummary.MIXED, highest
 
+def duffel_post(path: str, payload: dict) -> dict:
+    """
+    Minimal Duffel POST helper, used by duffel_create_offer_request.
+    Requires DUFFEL_API_TOKEN to be set in environment.
+    """
+    token = (os.getenv("DUFFEL_API_TOKEN") or "").strip()
+    if not token:
+        raise HTTPException(status_code=500, detail="DUFFEL_API_TOKEN is not configured")
+
+    url = "https://api.duffel.com" + path
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Duffel-Version": "v2",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=45)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
+
+    # Duffel often returns useful JSON error details
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=data)
+
+    # Duffel responses are usually { "data": {...} }
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    return data
+def duffel_get(path: str, params: Optional[dict] = None) -> dict:
+    token = (os.getenv("DUFFEL_API_TOKEN") or "").strip()
+    if not token:
+        raise HTTPException(status_code=500, detail="DUFFEL_API_TOKEN is not configured")
+
+    url = "https://api.duffel.com" + path
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Duffel-Version": "v2",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params or {}, timeout=45)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Duffel request failed: {e}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=data)
+
+    return data
+
+
+def duffel_list_offers(offer_request_id: str, limit: int = 100) -> List[dict]:
+    """
+    Returns a list of offers for a given offer_request_id.
+    """
+    res = duffel_get("/offers", params={"offer_request_id": offer_request_id, "limit": int(limit)})
+    data = res.get("data") if isinstance(res, dict) else None
+    return data or []
+
 def duffel_create_offer_request(slices: List[dict], passengers: List[dict], cabin: str) -> dict:
     """
     Creates a Duffel offer request and returns the JSON response.
