@@ -1234,8 +1234,7 @@ def fetch_direct_only_offers(
         
     # duffel_post already raises on non-200s, so if we are here, we have data
 
-    body = resp.json()
-    offer_request_id = body.get("data", {}).get("id")
+    offer_request_id = data.get("id")
     if not offer_request_id:
         print("[direct_only] no offer_request_id returned")
         return []
