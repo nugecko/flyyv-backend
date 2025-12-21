@@ -804,6 +804,34 @@ def send_alert_confirmation_email(alert) -> None:
 
     alert_id = _get_attr(alert, "id", None)
 
+    # ================================================================
+    # SECTION START: USER FACING DISPLAY LABELS
+    # ================================================================
+
+    def _cabin_display_label(c) -> str:
+        raw = str(c or "").strip()
+        raw_upper = raw.upper()
+        mapping = {
+            "ECONOMY": "Economy",
+            "PREMIUM_ECONOMY": "Premium Economy",
+            "BUSINESS": "Business Class",
+            "FIRST": "First Class",
+        }
+        if raw_upper in mapping:
+            return mapping[raw_upper]
+        raw_clean = raw.replace("_", " ").strip()
+        return raw_clean.title() if raw_clean else "Business Class"
+
+    def _cabin_pill_label(c) -> str:
+        return _cabin_display_label(c).upper()
+
+    cabin_title = _cabin_display_label(cabin)
+    cabin_pill = _cabin_pill_label(cabin)
+
+    # ================================================================
+    # SECTION END: USER FACING DISPLAY LABELS
+    # ================================================================
+
     subject = f"{email_type_label}: {origin} \u2192 {destination} | {dep_start_label} to {dep_end_label} | {trip_length_label}"
 
     msg = EmailMessage()
@@ -811,11 +839,15 @@ def send_alert_confirmation_email(alert) -> None:
     msg["From"] = f"FLYYV <{ALERT_FROM_EMAIL}>"
     msg["To"] = to_email
 
+    # ================================================================
+    # SECTION START: PLAIN TEXT FALLBACK
+    # ================================================================
+
     text_body = (
         f"{email_type_label}\n\n"
         "Your alert is active.\n\n"
         f"Route: {origin} \u2192 {destination}\n"
-        f"Cabin: {cabin}\n"
+        f"Cabin: {cabin_title}\n"
         f"Passengers: {passengers}\n"
         f"{_price_basis_line(passengers)}\n"
         f"Departure window: {dep_window_label}\n"
@@ -827,58 +859,118 @@ def send_alert_confirmation_email(alert) -> None:
     )
     msg.set_content(text_body)
 
+    # ================================================================
+    # SECTION END: PLAIN TEXT FALLBACK
+    # ================================================================
+
+    # ================================================================
+    # SECTION START: HTML EMAIL TEMPLATE
+    # ================================================================
+
     html = f"""
     <html>
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:680px;margin:0 auto;padding:24px;">
+
+          <!-- =====================================================
+          SECTION START: EMAIL CONTAINER CARD
+          ====================================================== -->
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
+
+            <!-- =====================================================
+            SECTION START: HEADER LABEL
+            ====================================================== -->
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{email_type_label}</div>
+            <!-- =====================================================
+            SECTION END: HEADER LABEL
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: MAIN TITLE
+            ====================================================== -->
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:700;margin:0 0 12px 0;">
-              Your alert is active
+              Your alert is <span style="color:#059669;font-weight:800;">active</span>
             </div>
+            <!-- =====================================================
+            SECTION END: MAIN TITLE
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: SUMMARY
+            ====================================================== -->
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 12px 0;">
               We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
             </div>
+            <!-- =====================================================
+            SECTION END: SUMMARY
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: META DETAILS
+            ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 16px 0;">
               Passengers: <strong>{_passengers_label(passengers)}</strong><br>
               {_price_basis_line(passengers)}
             </div>
+            <!-- =====================================================
+            SECTION END: META DETAILS
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: PILLS
+            ====================================================== -->
             <div style="margin:0 0 18px 0;">
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {origin} \u2192 {destination}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;margin-bottom:8px;">
-                {str(cabin).upper()}
+                {cabin_pill}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {_passengers_label(passengers)}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {pill_type_label}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {dep_window_label}
               </span>
+
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
                 {trip_length_label}
               </span>
+
               {f'''
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
                 {int(theoretical_combinations)} combinations
               </span>
               ''' if theoretical_combinations else ''}
-            </div>
 
+            </div>
+            <!-- =====================================================
+            SECTION END: PILLS
+            ====================================================== -->
+
+            <!-- =====================================================
+            SECTION START: ALERT ID
+            ====================================================== -->
             {f'''
             <div style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">
               Alert ID: {alert_id}
             </div>
             ''' if alert_id else ''}
+            <!-- =====================================================
+            SECTION END: ALERT ID
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: WHAT WE WILL DO
+            ====================================================== -->
             <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
               <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
               <ul style="margin:0;padding-left:18px;color:#111827;font-size:15px;line-height:1.6;">
@@ -887,26 +979,56 @@ def send_alert_confirmation_email(alert) -> None:
                 <li>Let you jump straight back into your results anytime</li>
               </ul>
             </div>
+            <!-- =====================================================
+            SECTION END: WHAT WE WILL DO
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: PRIMARY CTA
+            ====================================================== -->
             <div style="margin:0 0 18px 0;">
               <a href="{results_url}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:700;font-size:15px;">
                 View results
               </a>
             </div>
+            <!-- =====================================================
+            SECTION END: PRIMARY CTA
+            ====================================================== -->
 
+            <!-- =====================================================
+            SECTION START: FOOTNOTE
+            ====================================================== -->
             <div style="font-size:12px;color:#6b7280;line-height:1.4;">
               You are receiving this email because you created a {email_type_label}.
             </div>
-          </div>
+            <!-- =====================================================
+            SECTION END: FOOTNOTE
+            ====================================================== -->
 
+          </div>
+          <!-- =====================================================
+          SECTION END: EMAIL CONTAINER CARD
+          ====================================================== -->
+
+          <!-- =====================================================
+          SECTION START: OUTER FOOTER
+          ====================================================== -->
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
             Flyyv, <a href="{results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
           </div>
+          <!-- =====================================================
+          SECTION END: OUTER FOOTER
+          ====================================================== -->
+
         </div>
       </body>
     </html>
     """
+
+    # ================================================================
+    # SECTION END: HTML EMAIL TEMPLATE
+    # ================================================================
 
     msg.add_alternative(html, subtype="html")
 
@@ -921,7 +1043,6 @@ def send_alert_confirmation_email(alert) -> None:
 # =====================================================================
 # SECTION END: ALERT CONFIRMATION EMAIL
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: EARLY ACCESS WELCOME EMAIL
