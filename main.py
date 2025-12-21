@@ -1250,6 +1250,17 @@ def fetch_direct_only_offers(
         {"origin": destination, "destination": origin, "departure_date": ret_date.isoformat()},
     ]
 
+    # Micro-step: force city origins to airport IATA for Duffel
+   for s in slices:
+       o = s.get("origin") or {}
+       if o.get("type") == "city":
+           airports = o.get("airports") or []
+           if airports:
+               preferred = next((a for a in airports if a.get("iata_code") == "LHR"), None)
+               chosen = preferred or airports[0]
+               s["origin"] = {"iata_code": chosen.get("iata_code")}
+               s["origin_type"] = "airport"
+
     pax = [{"type": "adult"} for _ in range(passengers)]
 
     url = f"{DUFFEL_API_BASE}/air/offer_requests"
