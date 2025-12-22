@@ -1187,6 +1187,8 @@ def generate_date_pairs(params, max_pairs: int = 60):
     if not earliest or not latest or earliest > latest:
         return []
 
+    print(f"[pairs] search_mode={getattr(params,'search_mode',None)} earliest={earliest} latest={latest} nights={getattr(params,'nights',None)} minStayDays={getattr(params,'minStayDays',None)} maxStayDays={getattr(params,'maxStayDays',None)} maxDatePairs={getattr(params,'maxDatePairs',None)}")
+
     # Respect any param cap if it exists
     param_cap = getattr(params, "maxDatePairs", None)
     if isinstance(param_cap, int) and param_cap > 0:
