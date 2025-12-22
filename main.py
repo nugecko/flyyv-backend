@@ -2766,7 +2766,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
 
         alert = Alert(
             id=alert_id,
-            user_email=payload.email,
+            user_email=app_user.email,
             origin=payload.origin,
             destination=payload.destination,
             cabin=payload.cabin,
@@ -2800,7 +2800,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
 
         return AlertOut(
             id=alert.id,
-            email=alert.user_email,
+            user_email=app_user.email,
             origin=alert.origin,
             destination=alert.destination,
             cabin=alert.cabin,
