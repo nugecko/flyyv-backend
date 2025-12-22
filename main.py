@@ -1290,8 +1290,10 @@ def fetch_direct_only_offers(
 
     # Micro-step: force city origins to airport IATA for Duffel
     for s in slices:
-        o = s.get("origin") or {}
-        if o.get("type") == "city":
+        o = s.get("origin")
+
+        # Most calls pass strings ("LON", "TLV"), only transform when it's a city object.
+        if isinstance(o, dict) and o.get("type") == "city":
             airports = o.get("airports") or []
             if airports:
                 preferred = next((a for a in airports if a.get("iata_code") == "LHR"), None)
