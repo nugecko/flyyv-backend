@@ -1162,22 +1162,29 @@ def effective_caps(params: SearchParams) -> Tuple[int, int, int]:
     )
 
     return max_pairs, max_offers_pair, max_offers_total
+
+
 def generate_date_pairs(params, max_pairs: int = 60):
     """
-    Build (departure_date, return_date) pairs from the search window and stay rules.
+    Build (departure_date, return_date) pairs.
 
-    Uses:
-      - params.earliestDeparture, params.latestDeparture
-      - params.minStayDays, params.maxStayDays
-      - caps to max_pairs and params.maxDatePairs (if present)
+    Rules:
+      - Single searches: allow minStayDays..maxStayDays (existing behaviour)
+      - FlyyvFlex (search_mode == "flexible"): trip length is fixed
+        Use a single "nights" value (source of truth):
+          1) params.nights if present
+          2) else params.minStayDays
+          3) else 0
+        Generate only one return per departure:
+          return = departure + nights
+        Skip if return > latestDeparture
+        processedPairs must be len(valid_pairs) downstream
     """
-    earliest = params.earliestDeparture
-    latest = params.latestDeparture
+    earliest = getattr(params, "earliestDeparture", None)
+    latest = getattr(params, "latestDeparture", None)
+
     if not earliest or not latest or earliest > latest:
         return []
-
-    min_stay = max(0, int(getattr(params, "minStayDays", 0) or 0))
-    max_stay = max(min_stay, int(getattr(params, "maxStayDays", min_stay) or min_stay))
 
     # Respect any param cap if it exists
     param_cap = getattr(params, "maxDatePairs", None)
@@ -1185,6 +1192,35 @@ def generate_date_pairs(params, max_pairs: int = 60):
         max_pairs = min(max_pairs, param_cap)
 
     pairs = []
+
+    search_mode = getattr(params, "search_mode", None)
+
+    # -----------------------------------------------------------------
+    # FlyyvFlex: fixed nights, one pair per departure, skip out-of-window
+    # -----------------------------------------------------------------
+    if search_mode == "flexible":
+        nights = getattr(params, "nights", None)
+        if nights is None:
+            nights = getattr(params, "minStayDays", None)
+        nights = int(nights or 0)
+        if nights < 0:
+            nights = 0
+
+        dep = earliest
+        while dep <= latest and len(pairs) < max_pairs:
+            ret = dep + timedelta(days=nights)
+            if ret <= latest:
+                pairs.append((dep, ret))
+            dep = dep + timedelta(days=1)
+
+        return pairs
+
+    # -----------------------------------------------------------------
+    # Default: original behaviour (range of stay lengths)
+    # -----------------------------------------------------------------
+    min_stay = max(0, int(getattr(params, "minStayDays", 0) or 0))
+    max_stay = max(min_stay, int(getattr(params, "maxStayDays", min_stay) or min_stay))
+
     dep = earliest
     while dep <= latest and len(pairs) < max_pairs:
         for stay in range(min_stay, max_stay + 1):
@@ -1195,6 +1231,7 @@ def generate_date_pairs(params, max_pairs: int = 60):
         dep = dep + timedelta(days=1)
 
     return pairs
+
 
 def estimate_date_pairs(params: SearchParams) -> int:
     max_pairs, _, _ = effective_caps(params)
@@ -1252,14 +1289,14 @@ def fetch_direct_only_offers(
 
     # Micro-step: force city origins to airport IATA for Duffel
     for s in slices:
-       o = s.get("origin") or {}
-       if o.get("type") == "city":
-           airports = o.get("airports") or []
-           if airports:
-               preferred = next((a for a in airports if a.get("iata_code") == "LHR"), None)
-               chosen = preferred or airports[0]
-               s["origin"] = {"iata_code": chosen.get("iata_code")}
-               s["origin_type"] = "airport"
+        o = s.get("origin") or {}
+        if o.get("type") == "city":
+            airports = o.get("airports") or []
+            if airports:
+                preferred = next((a for a in airports if a.get("iata_code") == "LHR"), None)
+                chosen = preferred or airports[0]
+                s["origin"] = {"iata_code": chosen.get("iata_code")}
+                s["origin_type"] = "airport"
 
     pax = [{"type": "adult"} for _ in range(passengers)]
 
@@ -1278,8 +1315,6 @@ def fetch_direct_only_offers(
     except Exception as e:
         print(f"[direct_only] error creating request: {e}")
         return []
-        
-    # duffel_post already raises on non-200s, so if we are here, we have data
 
     offer_request_id = data.get("id")
     if not offer_request_id:
