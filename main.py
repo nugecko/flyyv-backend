@@ -2876,9 +2876,10 @@ def update_alert(
             if val is not None:
                 setattr(alert, field, val)
 
-        if payload.passengers:
+        pax = getattr(payload, "passengers", None)
+        if pax is not None:
             max_passengers = get_config_int("MAX_PASSENGERS", 4)
-            alert.passengers = min(max(1, payload.passengers), max_passengers)
+            alert.passengers = min(max(1, int(pax)), max_passengers)
 
         alert.updated_at = datetime.utcnow()
         db.commit()
