@@ -2677,24 +2677,45 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
         db.close()
 
     if app_user:
-        name_parts: List[str] = []
-        if app_user.first_name:
-            name_parts.append(app_user.first_name)
-        if app_user.last_name:
-            name_parts.append(app_user.last_name)
-        name = " ".join(name_parts) or "Flyyv user"
         email = app_user.email
+
+        # Count active alerts for this user (by email, which is how Alert links today)
+        active_alerts = (
+            db.query(Alert)
+            .filter(Alert.user_email == app_user.email, Alert.is_active == True)
+            .count()
+        )
+
+        limit = int(app_user.plan_active_alert_limit or 1)
+        remaining = max(0, limit - int(active_alerts))
+
+        entitlements = ProfileEntitlements(
+            plan_tier=app_user.plan_tier or "free",
+            active_alert_limit=limit,
+            max_departure_window_days=int(app_user.plan_max_departure_window_days or 15),
+            checks_per_day=int(app_user.plan_checks_per_day or 1),
+        )
+
+        alert_usage = ProfileAlertUsage(
+            active_alerts=int(active_alerts),
+            remaining_slots=int(remaining),
+        )
     else:
-        name = "Flyyv user"
-        email = None
+        email = ""
+        entitlements = None
+        alert_usage = None
 
-    profile_user = ProfileUser(id=x_user_id, name=name, email=email, plan="Free")
+    profile_user = ProfileUser(id=x_user_id, email=email, credits=int(wallet_balance))
+    subscription = SubscriptionInfo(plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Free"), status="active", renews_on=None)
+    wallet = WalletInfo(balance=int(wallet_balance), currency="credits")
 
-    subscription = SubscriptionInfo(plan="Flyyv Free", billingCycle=None, renewalDate=None, monthlyCredits=0)
-
-    wallet = WalletInfo(balance=wallet_balance, currency="credits")
-
-    return ProfileResponse(user=profile_user, subscription=subscription, wallet=wallet)
+    return ProfileResponse(
+        user=profile_user,
+        subscription=subscription,
+        wallet=wallet,
+        entitlements=entitlements,
+        alertUsage=alert_usage,
+    )
 
 # =====================================================================
 # SECTION END: PUBLIC CONFIG, USER SYNC, PROFILE
