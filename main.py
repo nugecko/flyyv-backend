@@ -2727,7 +2727,7 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
 # =====================================================================
 
 @app.post("/alerts", response_model=AlertOut)
-def create_alert(payload: AlertCreate):
+def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-User-Id")):
     db = SessionLocal()
     try:
         alert_id = str(uuid4())
@@ -2745,6 +2745,22 @@ def create_alert(payload: AlertCreate):
 
         max_passengers = get_config_int("MAX_PASSENGERS", 4)
         pax = max(1, int(payload.passengers or 1))
+                # Plan enforcement: active alert limit (create)
+        app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        if not app_user:
+            raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
+
+        active_count = (
+            db.query(Alert)
+            .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
+            .count()
+        )
+        limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
+
+        # Creating an alert always creates it active in v1
+        if active_count >= limit:
+            raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
+        
         if pax > max_passengers:
             pax = max_passengers
 
