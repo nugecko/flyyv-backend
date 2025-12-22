@@ -238,6 +238,7 @@ class SearchParams(BaseModel):
     latestDeparture: date
     minStayDays: int
     maxStayDays: int
+    nights: Optional[int] = None
     maxPrice: Optional[float] = None
     cabin: str = "BUSINESS"
     passengers: int = 1
