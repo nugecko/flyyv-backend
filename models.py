@@ -59,6 +59,14 @@ class AppUser(Base):
     # Per user alerts switch
     email_alerts_enabled = Column(Boolean, nullable=False, default=True)
 
+    # =======================================
+    # SECTION: PLAN ENTITLEMENTS (v1)
+    # =======================================
+    plan_tier = Column(String(20), nullable=False, default="free")  # free | monthly | annual | admin
+    plan_active_alert_limit = Column(Integer, nullable=False, default=1)
+    plan_max_departure_window_days = Column(Integer, nullable=False, default=15)
+    plan_checks_per_day = Column(Integer, nullable=False, default=1)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(
         DateTime,
