@@ -1201,7 +1201,13 @@ def generate_date_pairs(params, max_pairs: int = 60):
     # -----------------------------------------------------------------
     # FlyyvFlex: fixed nights, one pair per departure, skip out-of-window
     # -----------------------------------------------------------------
-    if search_mode == "flexible":
+    if (search_mode == "flexible") or (getattr(params, "nights", None) is not None) or (
+        (getattr(params, "minStayDays", None) is not None)
+        and (getattr(params, "maxStayDays", None) is not None)
+        and int(getattr(params, "minStayDays") or 0) > 0
+        and int(getattr(params, "minStayDays") or 0) == int(getattr(params, "maxStayDays") or 0)
+    ):
+
         nights = getattr(params, "nights", None)
         if nights is None:
             nights = getattr(params, "minStayDays", None)
