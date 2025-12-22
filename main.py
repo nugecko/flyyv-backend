@@ -1225,6 +1225,13 @@ def generate_date_pairs(params, max_pairs: int = 60):
             pairs.append((dep, ret))
             dep = dep + timedelta(days=1)
 
+        print(
+            f"[pairs_flex] nights={nights} earliest={earliest} latest={latest} "
+            f"last_dep={last_dep} len={len(pairs)} "
+            f"first_pair={pairs[0] if pairs else None} "
+            f"last_pair={pairs[-1] if pairs else None}"
+        )
+
         return pairs
 
     # -----------------------------------------------------------------
