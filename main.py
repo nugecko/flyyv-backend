@@ -1209,11 +1209,14 @@ def generate_date_pairs(params, max_pairs: int = 60):
         if nights < 0:
             nights = 0
 
+        # In FlyyvFlex, latestDeparture is the last allowed departure date.
+        # Therefore, the last valid departure is latest - nights (so return stays aligned to fixed trip length).
+        last_dep = latest - timedelta(days=nights)
+
         dep = earliest
-        while dep <= latest and len(pairs) < max_pairs:
+        while dep <= last_dep and len(pairs) < max_pairs:
             ret = dep + timedelta(days=nights)
-            if ret <= latest:
-                pairs.append((dep, ret))
+            pairs.append((dep, ret))
             dep = dep + timedelta(days=1)
 
         return pairs
