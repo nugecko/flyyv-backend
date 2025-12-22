@@ -1364,6 +1364,22 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     if max_date_pairs and len(date_pairs) > max_date_pairs:
         print(f"[search] capping date_pairs from {len(date_pairs)} to {max_date_pairs} using MAX_DATE_PAIRS_PER_ALERT")
         date_pairs = date_pairs[:max_date_pairs]
+    # Definitive truth for UI counters
+    earliest = getattr(params, "earliestDeparture", None)
+    latest = getattr(params, "latestDeparture", None)
+    nights = getattr(params, "nights", None)
+    pairs_preview = [(d.isoformat(), r.isoformat()) for d, r in date_pairs[:12]]
+    print(
+        "[pairs_final]"
+        f" origin={params.origin}"
+        f" dest={params.destination}"
+        f" earliestDeparture={earliest}"
+        f" latestDeparture={latest}"
+        f" nights={nights}"
+        f" totalPairs={len(date_pairs)}"
+        f" preview12={pairs_preview}"
+    )
+
 
     if not date_pairs:
         print("[search] no date pairs generated, returning empty list")
