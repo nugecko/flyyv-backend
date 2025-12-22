@@ -118,8 +118,11 @@ def _compute_theoretical_combinations(alert) -> Optional[int]:
         return None
 
     try:
-        days = (dep_end - dep_start).days + 1
-        return max(1, int(days))
+        # FlyyvFlex with fixed nights:
+        # valid departures are dep_start .. (dep_end - nights) inclusive
+        total_days = (dep_end - dep_start).days
+        valid = total_days - int(nights) + 1
+        return max(0, int(valid))
     except Exception:
         return None
 
