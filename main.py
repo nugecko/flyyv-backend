@@ -1620,6 +1620,24 @@ def run_search_job(job_id: str):
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
 
+        # Definitive truth for UI counters (async job path)
+        p = job.params
+        earliest = getattr(p, "earliestDeparture", None)
+        latest = getattr(p, "latestDeparture", None)
+        nights = getattr(p, "nights", None)
+        pairs_preview = [(d.isoformat(), r.isoformat()) for d, r in date_pairs[:12]]
+        print(
+            f"[pairs_final]"
+            f" job_id={job_id}"
+            f" origin={p.origin}"
+            f" dest={p.destination}"
+            f" earliestDeparture={earliest}"
+            f" latestDeparture={latest}"
+            f" nights={nights}"
+            f" totalPairs={total_pairs}"
+            f" preview12={pairs_preview}"
+        )
+
         job.total_pairs = total_pairs
         job.processed_pairs = 0
         job.updated_at = datetime.utcnow()
