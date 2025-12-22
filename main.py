@@ -2373,6 +2373,14 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not DUFFEL_ACCESS_TOKEN:
         return {"status": "error", "source": "duffel_not_configured", "options": []}
+    print(
+        f"[search_business] search_mode={getattr(params,'search_mode',None)} "
+        f"earliestDeparture={getattr(params,'earliestDeparture',None)} "
+        f"latestDeparture={getattr(params,'latestDeparture',None)} "
+        f"nights={getattr(params,'nights',None)} "
+        f"minStayDays={getattr(params,'minStayDays',None)} "
+        f"maxStayDays={getattr(params,'maxStayDays',None)}"
+    )
 
     max_passengers = get_config_int("MAX_PASSENGERS", 4)
     if params.passengers > max_passengers:
