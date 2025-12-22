@@ -2921,7 +2921,7 @@ def update_alert(
             .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
             .first()
         )
-                if not alert:
+        if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
         # Plan enforcement: active alert limit (activation)
