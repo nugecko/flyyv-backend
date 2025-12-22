@@ -2921,8 +2921,26 @@ def update_alert(
             .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
             .first()
         )
-        if not alert:
+                if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
+
+        # Plan enforcement: active alert limit (activation)
+        requested_is_active = getattr(payload, "is_active", None)
+        if requested_is_active is True and alert.is_active is not True:
+            limit = 1
+            if x_user_id:
+                app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+                if app_user:
+                    limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
+
+            active_count = (
+                db.query(Alert)
+                .filter(Alert.user_email == resolved_email, Alert.is_active == True)  # noqa: E712
+                .count()
+            )
+
+            if active_count >= limit:
+                raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
 
         for field in (
             "alert_type",
