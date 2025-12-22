@@ -2882,9 +2882,9 @@ def update_alert(
 
         alert.updated_at = datetime.utcnow()
         db.commit()
-        db.refresh(alert)
 
         return {"status": "ok"}
+
     finally:
         db.close()
 
