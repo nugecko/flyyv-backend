@@ -468,18 +468,28 @@ class WalletInfo(BaseModel):
     currency: str = "credits"
 
 
+class ProfileEntitlements(BaseModel):
+    plan_tier: str
+    active_alert_limit: int
+    max_departure_window_days: int
+    checks_per_day: int
+
+class ProfileAlertUsage(BaseModel):
+    active_alerts: int
+    remaining_slots: int
+
 class ProfileResponse(BaseModel):
     user: ProfileUser
     subscription: SubscriptionInfo
     wallet: WalletInfo
-
+    entitlements: Optional[ProfileEntitlements] = None
+    alertUsage: Optional[ProfileAlertUsage] = None
 
 class PublicConfig(BaseModel):
     maxDepartureWindowDays: int
     maxStayNights: int
     minStayNights: int
     maxPassengers: int
-
 
 class AlertWithStatsResponse(AlertResponse):
     # Computed from AlertRun history (min price_found)
