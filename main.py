@@ -405,13 +405,28 @@ class AlertCreatePayload(AlertBase):
 
 
 class AlertUpdatePayload(BaseModel):
+    # Basic status
     is_active: Optional[bool] = None
-    preferred_days: Optional[List[int]] = None
+
+    # Core alert rule
+    alert_type: Optional[str] = None          # e.g. "scheduled_3x", "new_best", "under_price"
+    mode: Optional[str] = None                # e.g. "smart" or "single"
     max_price: Optional[int] = None
+
+    # Date windows (used for flex alerts and fixed alerts)
+    departure_start: Optional[date] = None
+    departure_end: Optional[date] = None
+    return_start: Optional[date] = None
+    return_end: Optional[date] = None
+
+    # Passengers
+    passengers: Optional[int] = None
+
+    # Legacy or UI fields (safe to accept even if not used)
+    preferred_days: Optional[List[int]] = None
     min_days: Optional[int] = None
     max_days: Optional[int] = None
     notes: Optional[str] = None
-
 
 class AlertResponse(AlertBase):
     id: str
