@@ -2747,23 +2747,31 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
     app_user = None
     active_alerts = 0
 
+    # Identity fields the UI expects from /profile
+    display_name = "Member"
+    external_id = x_user_id
+    joined_at = None
+
     # Keep all DB access inside the session lifecycle
     db = SessionLocal()
     try:
         app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
 
         if app_user:
-            # Alerts still link by user_email today, but email is resolved via identity chain (external_id header)
+            external_id = app_user.external_id
+            joined_at = app_user.created_at
+
+            # Count alerts by identity (user_id), not email
             active_alerts = (
                 db.query(Alert)
-                .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
+                .filter(Alert.user_id == app_user.id, Alert.is_active == True)  # noqa: E712
                 .count()
             )
     finally:
         db.close()
 
     if app_user:
-        email = app_user.email
+        email = app_user.email or ""
 
         limit = int(app_user.plan_active_alert_limit or 1)
         remaining = max(0, limit - int(active_alerts))
@@ -2784,7 +2792,7 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
         entitlements = None
         alert_usage = None
 
-    profile_user = ProfileUser(id=x_user_id, email=email, credits=int(wallet_balance))
+    profile_user = ProfileUser(id=external_id, email=email, credits=int(wallet_balance))
     subscription = SubscriptionInfo(
         plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Free"),
         status="active",
@@ -2793,6 +2801,9 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
     wallet = WalletInfo(balance=int(wallet_balance), currency="credits")
 
     return ProfileResponse(
+        display_name=display_name,
+        external_id=external_id,
+        joined_at=joined_at,
         user=profile_user,
         subscription=subscription,
         wallet=wallet,
@@ -2803,7 +2814,6 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
 # =====================================================================
 # SECTION END: PUBLIC CONFIG, USER SYNC, PROFILE
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: ALERT ROUTES
