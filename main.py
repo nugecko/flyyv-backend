@@ -2928,28 +2928,33 @@ def get_alerts(
         if not app_user:
             raise HTTPException(status_code=401, detail="Invalid user")
 
-        query = db.query(Alert).filter(Alert.user_id == app_user.id)
+        # Alerts are still owned by user_email today
+        query = db.query(Alert).filter(Alert.user_email == app_user.email)
         if not include_inactive:
-            query = query.filter(Alert.is_active == True)  # noqa
+            query = query.filter(Alert.is_active == True)  # noqa: E712
 
         alerts = query.order_by(Alert.created_at.desc()).all()
         result: List[AlertOut] = []
 
-        # One query to fetch best (lowest) price_found per alert_id
-        best_runs = (
-            db.query(AlertRun.alert_id, func.min(AlertRun.price_found).label("best_price"))
-            .filter(AlertRun.alert_id.in_([a.id for a in alerts]))
-            .filter(AlertRun.price_found.isnot(None))
-            .group_by(AlertRun.alert_id)
-            .all()
-        )
-        best_price_by_alert_id = {r.alert_id: r.best_price for r in best_runs}
+        alert_ids = [a.id for a in alerts]
+        best_price_by_alert_id = {}
+
+        if alert_ids:
+            # One query to fetch best (lowest) price_found per alert_id
+            best_runs = (
+                db.query(AlertRun.alert_id, func.min(AlertRun.price_found).label("best_price"))
+                .filter(AlertRun.alert_id.in_(alert_ids))
+                .filter(AlertRun.price_found.isnot(None))
+                .group_by(AlertRun.alert_id)
+                .all()
+            )
+            best_price_by_alert_id = {r.alert_id: r.best_price for r in best_runs}
 
         for a in alerts:
             result.append(
                 AlertOut(
                     id=a.id,
-                    email=getattr(app_user, "email", None),
+                    user_email=getattr(app_user, "email", None),
                     origin=a.origin,
                     destination=a.destination,
                     cabin=a.cabin,
