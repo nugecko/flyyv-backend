@@ -2760,7 +2760,14 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         # Creating an alert always creates it active in v1
         if active_count >= limit:
             raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
-        
+
+        # Plan enforcement: departure window limit (create)
+        window_limit = int(getattr(app_user, "plan_max_departure_window_days", 15) or 15)
+        if payload.departure_start and payload.departure_end:
+            window_days = (payload.departure_end - payload.departure_start).days + 1
+            if window_days > window_limit:
+                raise HTTPException(status_code=403, detail={"code": "WINDOW_LIMIT_EXCEEDED"})
+
         if pax > max_passengers:
             pax = max_passengers
 
