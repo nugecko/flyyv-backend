@@ -2681,20 +2681,36 @@ def public_config():
         maxPassengers=max_passengers,
     )
 
-
 @app.post("/user-sync")
 def user_sync(payload: UserSyncPayload):
     db = SessionLocal()
     try:
+        # ------------------------------
+        # Plan defaults: single source of truth
+        # ------------------------------
+        FREE_DEFAULTS = {
+            "plan_tier": "free",
+            "plan_active_alert_limit": 1,
+            "plan_max_departure_window_days": 7,
+            "plan_checks_per_day": 3,
+        }
+
         # 1) Primary lookup: identity chain
-        user = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
+        user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == payload.external_id)
+            .first()
+        )
 
         # 2) Secondary lookup: same email, new external_id (Base44 re-issue / auth reset)
         if user is None and payload.email:
             email_norm = payload.email.strip().lower()
-            user = db.query(AppUser).filter(func.lower(AppUser.email) == email_norm).first()
+            user = (
+                db.query(AppUser)
+                .filter(func.lower(AppUser.email) == email_norm)
+                .first()
+            )
             if user is not None:
-                # Bind the new external_id to the existing account
                 user.external_id = payload.external_id
 
         if user is None:
@@ -2719,56 +2735,52 @@ def user_sync(payload: UserSyncPayload):
             user.marketing_consent = payload.marketing_consent
             user.source = payload.source or user.source
 
-          # ==============================
-          # Plan defaults: single source of truth
-          # ==============================
-          FREE_DEFAULTS = {
-              "plan_tier": "free",
-              "plan_active_alert_limit": 1,
-              "plan_max_departure_window_days": 7,
-              "plan_checks_per_day": 3,
-          }
+        # 5) Ensure entitlements exist, and lock Free plan values
+        if getattr(user, "plan_tier", None) in (None, ""):
+            user.plan_tier = FREE_DEFAULTS["plan_tier"]
 
-          # If missing, set baseline defaults (do not downgrade paid users)
-          if getattr(user, "plan_tier", None) is None:
-              user.plan_tier = FREE_DEFAULTS["plan_tier"]
+        if getattr(user, "plan_active_alert_limit", None) is None:
+            user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
 
-          if getattr(user, "plan_active_alert_limit", None) is None:
-              user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
+        if getattr(user, "plan_max_departure_window_days", None) is None:
+            user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
 
-          if getattr(user, "plan_max_departure_window_days", None) is None:
-              user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
+        if getattr(user, "plan_checks_per_day", None) is None:
+            user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
-          if getattr(user, "plan_checks_per_day", None) is None:
-              user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
+        if user.plan_tier == "free":
+            user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
+            user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
+            user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
-          # Lock Free plan values to prevent drift
-          if user.plan_tier == "free":
-              user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
-              user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
-              user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
-
-          db.commit()
-          db.refresh(user)
-          return {"status": "ok", "id": user.id}
+        db.commit()
+        db.refresh(user)
+        return {"status": "ok", "id": user.id}
 
     except Exception:
-        # If a race occurs (two syncs at once), avoid infinite retries:
-        # roll back and return the existing user if possible.
         db.rollback()
 
+        # If a race occurs (two syncs at once), avoid infinite retries:
+        # return the existing user if possible.
         if payload.external_id:
-            existing = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
+            existing = (
+                db.query(AppUser)
+                .filter(AppUser.external_id == payload.external_id)
+                .first()
+            )
             if existing is not None:
                 return {"status": "ok", "id": existing.id}
 
         if payload.email:
             email_norm = payload.email.strip().lower()
-            existing = db.query(AppUser).filter(func.lower(AppUser.email) == email_norm).first()
+            existing = (
+                db.query(AppUser)
+                .filter(func.lower(AppUser.email) == email_norm)
+                .first()
+            )
             if existing is not None:
                 return {"status": "ok", "id": existing.id}
 
-        # If we genuinely cannot recover, re-raise so you can see the real error
         raise
     finally:
         db.close()
