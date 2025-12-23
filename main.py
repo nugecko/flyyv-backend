@@ -2276,6 +2276,7 @@ def run_all_alerts_cycle() -> None:
             return
 
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
+            print(f"[alerts] Found {len(alerts)} active alerts before cadence filtering")
 
         # Plan enforcement: scheduler frequency by plan_checks_per_day
         # 1/day => 24h cadence, 3/day => 8h cadence
