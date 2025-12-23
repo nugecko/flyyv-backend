@@ -2682,12 +2682,22 @@ def public_config():
 def user_sync(payload: UserSyncPayload):
     db = SessionLocal()
     try:
+        # 1) Primary lookup: identity chain
         user = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
 
+        # 2) Secondary lookup: same email, new external_id (Base44 re-issue / auth reset)
+        if user is None and payload.email:
+            email_norm = payload.email.strip().lower()
+            user = db.query(AppUser).filter(func.lower(AppUser.email) == email_norm).first()
+            if user is not None:
+                # Bind the new external_id to the existing account
+                user.external_id = payload.external_id
+
         if user is None:
+            # 3) Create only if neither external_id nor email exists
             user = AppUser(
                 external_id=payload.external_id,
-                email=payload.email,
+                email=(payload.email.strip().lower() if payload.email else None),
                 first_name=payload.first_name,
                 last_name=payload.last_name,
                 country=payload.country,
@@ -2696,7 +2706,9 @@ def user_sync(payload: UserSyncPayload):
             )
             db.add(user)
         else:
-            user.email = payload.email
+            # 4) Update profile fields (do not downgrade plan entitlements here)
+            if payload.email:
+                user.email = payload.email.strip().lower()
             user.first_name = payload.first_name
             user.last_name = payload.last_name
             user.country = payload.country
@@ -2705,11 +2717,28 @@ def user_sync(payload: UserSyncPayload):
 
         db.commit()
         db.refresh(user)
-
         return {"status": "ok", "id": user.id}
+
+    except Exception:
+        # If a race occurs (two syncs at once), avoid infinite retries:
+        # roll back and return the existing user if possible.
+        db.rollback()
+
+        if payload.external_id:
+            existing = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
+            if existing is not None:
+                return {"status": "ok", "id": existing.id}
+
+        if payload.email:
+            email_norm = payload.email.strip().lower()
+            existing = db.query(AppUser).filter(func.lower(AppUser.email) == email_norm).first()
+            if existing is not None:
+                return {"status": "ok", "id": existing.id}
+
+        # If we genuinely cannot recover, re-raise so you can see the real error
+        raise
     finally:
         db.close()
-
 
 @app.get("/profile", response_model=ProfileResponse)
 def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
