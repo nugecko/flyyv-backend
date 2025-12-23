@@ -2295,7 +2295,14 @@ def run_all_alerts_cycle() -> None:
         for a in alerts:
             try:
                 user = db.query(AppUser).filter(AppUser.email == a.user_email).first()
-                checks_per_day = int(getattr(user, "plan_checks_per_day", 1) or 1) if user else 1
+                plan_tier = (getattr(user, "plan_tier", None) or "").lower()
+
+                # Admin alerts always run
+                if plan_tier == "admin":
+                    eligible_alerts.append(a)
+                    continue
+
+                checks_per_day = int(getattr(user, "plan_checks_per_day", 1) or 1)
 
                 last_run_at = getattr(a, "last_run_at", None)
                 if last_run_at:
