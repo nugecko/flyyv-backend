@@ -2904,7 +2904,6 @@ def get_alerts(
     finally:
         db.close()
 
-
 @app.patch("/alerts/{alert_id}")
 def update_alert(
     alert_id: str,
@@ -2914,14 +2913,17 @@ def update_alert(
 ):
     db = SessionLocal()
     try:
-        resolved_email = email
-        if not resolved_email and x_user_id:
+        # Auth, resolve user, do not trust email param
+        app_user = None
+        resolved_email = None
+
+        if x_user_id:
             app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user:
                 resolved_email = app_user.email
 
         if not resolved_email:
-            raise HTTPException(status_code=400, detail="Email required")
+            raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
 
         alert = (
             db.query(Alert)
@@ -2934,11 +2936,7 @@ def update_alert(
         # Plan enforcement: active alert limit (activation)
         requested_is_active = getattr(payload, "is_active", None)
         if requested_is_active is True and alert.is_active is not True:
-            limit = 1
-            if x_user_id:
-                app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-                if app_user:
-                    limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
+            limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
 
             active_count = (
                 db.query(Alert)
@@ -2946,23 +2944,19 @@ def update_alert(
                 .count()
             )
 
+            if active_count >= limit:
+                raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
+
         # Plan enforcement: departure window limit (update)
-        # Only enforce when the effective window can be determined.
-        if x_user_id:
-            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-        else:
-            app_user = None
+        window_limit = int(getattr(app_user, "plan_max_departure_window_days", 15) or 15)
 
-        if app_user:
-            window_limit = int(getattr(app_user, "plan_max_departure_window_days", 15) or 15)
+        effective_start = getattr(payload, "departure_start", None) or alert.departure_start
+        effective_end = getattr(payload, "departure_end", None) or alert.departure_end
 
-            effective_start = getattr(payload, "departure_start", None) or alert.departure_start
-            effective_end = getattr(payload, "departure_end", None) or alert.departure_end
-
-            if effective_start and effective_end:
-                window_days = (effective_end - effective_start).days + 1
-                if window_days > window_limit:
-                    raise HTTPException(status_code=403, detail={"code": "WINDOW_LIMIT_EXCEEDED"})
+        if effective_start and effective_end:
+            window_days = (effective_end - effective_start).days + 1
+            if window_days > window_limit:
+                raise HTTPException(status_code=403, detail={"code": "WINDOW_LIMIT_EXCEEDED"})
 
         for field in (
             "alert_type",
@@ -2991,7 +2985,6 @@ def update_alert(
     finally:
         db.close()
 
-
 @app.delete("/alerts/{alert_id}")
 def delete_alert(
     alert_id: str,
@@ -3000,18 +2993,23 @@ def delete_alert(
 ):
     db = SessionLocal()
     try:
-        alert = db.query(Alert).filter(Alert.id == alert_id).first()
-        if not alert:
-            raise HTTPException(status_code=404, detail="Alert not found")
-
-        resolved_email = email
-        if not resolved_email and x_user_id:
+        # Auth, resolve user, do not trust email param
+        resolved_email = None
+        if x_user_id:
             app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
             if app_user:
                 resolved_email = app_user.email
 
-        if resolved_email and alert.user_email != resolved_email:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        if not resolved_email:
+            raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
+
+        alert = (
+            db.query(Alert)
+            .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
+            .first()
+        )
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
 
         db.query(AlertRun).filter(AlertRun.alert_id == alert.id).delete()
         db.delete(alert)
