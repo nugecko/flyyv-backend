@@ -2742,36 +2742,7 @@ def user_sync(payload: UserSyncPayload):
           if getattr(user, "plan_checks_per_day", None) is None:
               user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
-          # Lock Free plan values to prevent drift from UI or partial sync payloads
-          if user.plan_tier == "free":
-              user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
-              user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
-              user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
-
-          # ==============================
-          # Plan defaults: single source of truth
-          # ==============================
-          FREE_DEFAULTS = {
-              "plan_tier": "free",
-              "plan_active_alert_limit": 1,
-              "plan_max_departure_window_days": 7,
-              "plan_checks_per_day": 3,
-          }
-
-          # If missing, set baseline defaults (do not downgrade paid users)
-          if getattr(user, "plan_tier", None) is None:
-              user.plan_tier = FREE_DEFAULTS["plan_tier"]
-
-          if getattr(user, "plan_active_alert_limit", None) is None:
-              user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
-
-          if getattr(user, "plan_max_departure_window_days", None) is None:
-              user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
-
-          if getattr(user, "plan_checks_per_day", None) is None:
-              user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
-
-          # Lock Free plan values to prevent drift from UI or partial sync payloads
+          # Lock Free plan values to prevent drift
           if user.plan_tier == "free":
               user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
               user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
