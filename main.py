@@ -2847,11 +2847,12 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         if not app_user:
             raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
 
-        active_count = (
+        active_alerts = (
             db.query(Alert)
             .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
             .count()
         )
+
         limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
 
         # Creating an alert always creates it active in v1
