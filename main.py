@@ -2946,8 +2946,23 @@ def update_alert(
                 .count()
             )
 
-            if active_count >= limit:
-                raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
+        # Plan enforcement: departure window limit (update)
+        # Only enforce when the effective window can be determined.
+        if x_user_id:
+            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        else:
+            app_user = None
+
+        if app_user:
+            window_limit = int(getattr(app_user, "plan_max_departure_window_days", 15) or 15)
+
+            effective_start = getattr(payload, "departure_start", None) or alert.departure_start
+            effective_end = getattr(payload, "departure_end", None) or alert.departure_end
+
+            if effective_start and effective_end:
+                window_days = (effective_end - effective_start).days + 1
+                if window_days > window_limit:
+                    raise HTTPException(status_code=403, detail={"code": "WINDOW_LIMIT_EXCEEDED"})
 
         for field in (
             "alert_type",
