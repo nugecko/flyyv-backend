@@ -2974,16 +2974,29 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         db.close()
 
 
+from fastapi import Request  # add near other fastapi imports if not already present
+
 @app.get("/alerts", response_model=List[AlertOut])
 def get_alerts(
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    request: Request,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     include_inactive: bool = False,
 ):
     db = SessionLocal()
     try:
+        # Hard reject legacy email-based access, header-only identity
+        if "email" in request.query_params:
+            raise HTTPException(
+                status_code=400,
+                detail="Email query param is not supported, use X-User-Id header",
+            )
+
+        if not x_user_id:
+            raise HTTPException(status_code=401, detail="X-User-Id header required")
+
         app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
         if not app_user:
-            raise HTTPException(status_code=401, detail="Invalid user")
+            raise HTTPException(status_code=403, detail="Unknown user")
 
         # Alerts are still owned by user_email today
         query = db.query(Alert).filter(Alert.user_email == app_user.email)
