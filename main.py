@@ -2765,12 +2765,13 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
             external_id = app_user.external_id
             joined_at = app_user.created_at
 
-            # Count alerts by identity (user_id), not email
+            # Count alerts by current ownership (user_email)
             active_alerts = (
                 db.query(Alert)
-                .filter(Alert.user_id == app_user.id, Alert.is_active == True)  # noqa: E712
+                .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
                 .count()
             )
+            
     finally:
         db.close()
 
