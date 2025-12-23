@@ -12,6 +12,8 @@ from collections import defaultdict, Counter
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy import func
+from datetime import datetime
+from typing import Optional
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -190,9 +192,6 @@ class AlertCreate(BaseModel):
 
     mode: Optional[str] = "single"  # "single" or "smart"
     passengers: Optional[int] = 1
-
-
-from typing import Optional
 
 class AlertOut(BaseModel):
     id: str
@@ -482,6 +481,11 @@ class ProfileAlertUsage(BaseModel):
     remaining_slots: int
 
 class ProfileResponse(BaseModel):
+    # Single source of truth fields for Base44 PlanCard
+    display_name: str
+    external_id: str
+    joined_at: Optional[datetime] = None
+
     user: ProfileUser
     subscription: SubscriptionInfo
     wallet: WalletInfo
