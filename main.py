@@ -11,6 +11,7 @@ from uuid import uuid4
 from collections import defaultdict, Counter
 import smtplib
 from email.message import EmailMessage
+from sqlalchemy import func
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -2889,46 +2890,37 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
 
 @app.get("/alerts", response_model=List[AlertOut])
 def get_alerts(
-    email: Optional[str] = None,
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     include_inactive: bool = False,
 ):
     db = SessionLocal()
     try:
-        resolved_email: Optional[str] = None
+        app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        if not app_user:
+            raise HTTPException(status_code=401, detail="Invalid user")
 
-        if email:
-            resolved_email = email
-        elif x_user_id:
-            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user:
-                resolved_email = app_user.email
-
-        if not resolved_email:
-            raise HTTPException(status_code=400, detail="Email required")
-
-        query = db.query(Alert).filter(Alert.user_email == resolved_email)
+        query = db.query(Alert).filter(Alert.user_id == app_user.id)
         if not include_inactive:
             query = query.filter(Alert.is_active == True)  # noqa
 
         alerts = query.order_by(Alert.created_at.desc()).all()
         result: List[AlertOut] = []
 
+        # One query to fetch best (lowest) price_found per alert_id
+        best_runs = (
+            db.query(AlertRun.alert_id, func.min(AlertRun.price_found).label("best_price"))
+            .filter(AlertRun.alert_id.in_([a.id for a in alerts]))
+            .filter(AlertRun.price_found.isnot(None))
+            .group_by(AlertRun.alert_id)
+            .all()
+        )
+        best_price_by_alert_id = {r.alert_id: r.best_price for r in best_runs}
+
         for a in alerts:
-            best_run = (
-                db.query(AlertRun)
-                .filter(AlertRun.alert_id == a.id)
-                .filter(AlertRun.price_found.isnot(None))
-                .order_by(AlertRun.price_found.asc())
-                .first()
-            )
-
-            best_price = best_run.price_found if best_run else None
-
             result.append(
                 AlertOut(
                     id=a.id,
-                    email=a.user_email,
+                    email=getattr(app_user, "email", None),
                     origin=a.origin,
                     destination=a.destination,
                     cabin=a.cabin,
@@ -2944,7 +2936,7 @@ def get_alerts(
                     times_sent=a.times_sent,
                     is_active=a.is_active,
                     last_price=a.last_price,
-                    best_price=best_price,
+                    best_price=best_price_by_alert_id.get(a.id),
                     last_run_at=a.last_run_at,
                     last_notified_at=getattr(a, "last_notified_at", None),
                     last_notified_price=getattr(a, "last_notified_price", None),
