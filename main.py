@@ -2714,21 +2714,26 @@ def user_sync(payload: UserSyncPayload):
 def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
     wallet_balance = USER_WALLETS.get(x_user_id, 0)
 
+    app_user = None
+    active_alerts = 0
+
+    # Keep all DB access inside the session lifecycle
     db = SessionLocal()
     try:
         app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+
+        if app_user:
+            # Alerts still link by user_email today, but email is resolved via identity chain (external_id header)
+            active_alerts = (
+                db.query(Alert)
+                .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
+                .count()
+            )
     finally:
         db.close()
 
     if app_user:
         email = app_user.email
-
-        # Count active alerts for this user (by email, which is how Alert links today)
-        active_alerts = (
-            db.query(Alert)
-            .filter(Alert.user_email == app_user.email, Alert.is_active == True)
-            .count()
-        )
 
         limit = int(app_user.plan_active_alert_limit or 1)
         remaining = max(0, limit - int(active_alerts))
@@ -2750,7 +2755,11 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
         alert_usage = None
 
     profile_user = ProfileUser(id=x_user_id, email=email, credits=int(wallet_balance))
-    subscription = SubscriptionInfo(plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Free"), status="active", renews_on=None)
+    subscription = SubscriptionInfo(
+        plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Free"),
+        status="active",
+        renews_on=None,
+    )
     wallet = WalletInfo(balance=int(wallet_balance), currency="credits")
 
     return ProfileResponse(
