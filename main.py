@@ -2719,7 +2719,7 @@ def user_sync(payload: UserSyncPayload):
             user.marketing_consent = payload.marketing_consent
             user.source = payload.source or user.source
 
-                  # ==============================
+          # ==============================
           # Plan defaults: single source of truth
           # ==============================
           FREE_DEFAULTS = {
