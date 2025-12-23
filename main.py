@@ -2276,13 +2276,47 @@ def run_all_alerts_cycle() -> None:
             return
 
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
-        print(f"[alerts] Running alerts cycle for {len(alerts)} alerts")
+
+        # Plan enforcement: scheduler frequency by plan_checks_per_day
+        # 1/day => 24h cadence, 3/day => 8h cadence
+        def _min_interval_seconds_for_checks_per_day(n: int) -> int:
+            n = int(n or 1)
+            if n <= 1:
+                return 24 * 60 * 60
+            if n >= 3:
+                return 8 * 60 * 60
+            # fallback: evenly divide the day
+            return int((24 * 60 * 60) / n)
+
+        eligible_alerts = []
+        skipped = 0
+
+        for a in alerts:
+            try:
+                user = db.query(AppUser).filter(AppUser.email == a.user_email).first()
+                checks_per_day = int(getattr(user, "plan_checks_per_day", 1) or 1) if user else 1
+
+                last_run_at = getattr(a, "last_run_at", None)
+                if last_run_at:
+                    min_interval = _min_interval_seconds_for_checks_per_day(checks_per_day)
+                    elapsed = (datetime.utcnow() - last_run_at).total_seconds()
+                    if elapsed < min_interval:
+                        skipped += 1
+                        continue
+
+                eligible_alerts.append(a)
+            except Exception:
+                # If anything is weird, fail open to avoid dropping alerts silently
+                eligible_alerts.append(a)
+
+        print(f"[alerts] Running alerts cycle for {len(eligible_alerts)} eligible alerts (skipped {skipped} due to plan cadence)")
 
         import traceback
 
-        for alert in alerts:
+        for alert in eligible_alerts:
             try:
                 process_alert(alert, db)
+                
             except Exception as e:
                 print(f"[alerts] Error processing alert {alert.id}: {e}")
                 traceback.print_exc()
