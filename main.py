@@ -191,9 +191,11 @@ class AlertCreate(BaseModel):
     passengers: Optional[int] = 1
 
 
+from typing import Optional
+
 class AlertOut(BaseModel):
     id: str
-    email: str
+    email: Optional[str] = None
     origin: str
     destination: str
     cabin: str
