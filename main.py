@@ -3024,7 +3024,7 @@ def get_alerts(
             result.append(
                 AlertOut(
                     id=a.id,
-                    user_email=getattr(app_user, "email", None),
+                    email=getattr(app_user, "email", None),
                     origin=a.origin,
                     destination=a.destination,
                     cabin=a.cabin,
