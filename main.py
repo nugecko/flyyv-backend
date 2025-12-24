@@ -2262,7 +2262,6 @@ def process_alert(alert: Alert, db: Session) -> None:
 
     db.commit()
 
-
 def run_all_alerts_cycle() -> None:
     if not master_alerts_enabled():
         print("[alerts] ALERTS_ENABLED is false, skipping alerts cycle")
@@ -2281,7 +2280,32 @@ def run_all_alerts_cycle() -> None:
         if not alerts_globally_enabled(db):
             print("[alerts] Global alerts disabled in admin_config, skipping alerts cycle")
             return
+        # -------------------------------------------------------
+        # Expire alerts: if today is after the last departure date
+        # Rule: expire when today > (departure_end or departure_start)
+        # -------------------------------------------------------
+        today = datetime.utcnow().date()
+        now = datetime.utcnow()
 
+        expiring = (
+            db.query(Alert)
+            .filter(Alert.is_active == True)  # noqa: E712
+            .filter(
+                func.coalesce(Alert.departure_end, Alert.departure_start).isnot(None)
+            )
+            .filter(
+                func.coalesce(Alert.departure_end, Alert.departure_start) < today
+            )
+            .all()
+        )
+
+        if expiring:
+            for a in expiring:
+                a.is_active = False
+                a.updated_at = now
+            db.commit()
+            print(f"[alerts] Expired {len(expiring)} alerts (today={today})")
+        
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
         print(f"[alerts] Found {len(alerts)} active alerts before cadence filtering")
 
