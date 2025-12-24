@@ -2995,6 +2995,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         alert = Alert(
             id=alert_id,
             user_email=app_user.email,
+            user_external_id=x_user_id,
             origin=payload.origin,
             destination=payload.destination,
             cabin=payload.cabin,
