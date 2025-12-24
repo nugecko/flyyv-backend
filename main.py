@@ -2069,6 +2069,44 @@ def _derive_alert_passengers(alert: Any) -> int:
     return max(1, value_int)
 
 
+def _min_interval_seconds_for_checks_per_day(n: int) -> int:
+    """
+    Plan enforcement: scheduler frequency by plan_checks_per_day
+    1/day => 24h cadence, 3/day => 8h cadence
+    """
+    try:
+        n = int(n or 1)
+    except Exception:
+        n = 1
+
+    if n <= 1:
+        return 24 * 60 * 60
+    if n >= 3:
+        return 8 * 60 * 60
+    return int((24 * 60 * 60) / n)
+
+
+def _get_user_for_alert(db: Session, alert: Alert) -> Optional[AppUser]:
+    """
+    Identity lookup for cadence, entitlements, and email eligibility.
+
+    Priority:
+    1) AppUser.external_id == alert.user_external_id (preferred, matches X-User-Id)
+    2) AppUser.email == alert.user_email (legacy fallback only)
+    """
+    user_external_id = getattr(alert, "user_external_id", None)
+    if user_external_id:
+        user = db.query(AppUser).filter(AppUser.external_id == user_external_id).first()
+        if user:
+            return user
+
+    user_email = getattr(alert, "user_email", None)
+    if user_email:
+        return db.query(AppUser).filter(AppUser.email == user_email).first()
+
+    return None
+
+
 def build_search_params_for_alert(alert: Alert) -> SearchParams:
     dep_start = alert.departure_start
     dep_end = alert.departure_end or alert.departure_start
@@ -2102,45 +2140,49 @@ def process_alert(alert: Alert, db: Session) -> None:
     now = datetime.utcnow()
     print(
         f"[alerts] process_alert START id={alert.id} "
-        f"email={alert.user_email} type={alert.alert_type} mode={alert.mode}"
+        f"external_id={getattr(alert, 'user_external_id', None)} "
+        f"email={getattr(alert, 'user_email', None)} "
+        f"type={getattr(alert, 'alert_type', None)} mode={getattr(alert, 'mode', None)}"
     )
 
-    user = db.query(AppUser).filter(AppUser.email == alert.user_email).first()
+    user = _get_user_for_alert(db, alert)
+
+    # Always stamp last_run_at when a run is attempted, even if we exit early
+    alert.last_run_at = now
+    alert.updated_at = now
 
     if not user:
-        db.add(AlertRun(
-            id=str(uuid4()),
-            alert_id=alert.id,
-            run_at=now,
-            price_found=None,
-            sent=False,
-            reason="no_user_for_alert",
-        ))
-        alert.last_run_at = now
-        alert.updated_at = now
+        db.add(
+            AlertRun(
+                id=str(uuid4()),
+                alert_id=alert.id,
+                run_at=now,
+                price_found=None,
+                sent=False,
+                reason="no_user_for_alert",
+            )
+        )
         db.commit()
         return
 
     if not should_send_alert(db, user):
-        db.add(AlertRun(
-            id=str(uuid4()),
-            alert_id=alert.id,
-            run_at=now,
-            price_found=None,
-            sent=False,
-            reason="alerts_disabled",
-        ))
-        alert.last_run_at = now
-        alert.updated_at = now
+        db.add(
+            AlertRun(
+                id=str(uuid4()),
+                alert_id=alert.id,
+                run_at=now,
+                price_found=None,
+                sent=False,
+                reason="alerts_disabled",
+            )
+        )
         db.commit()
         return
 
     params = build_search_params_for_alert(alert)
-    if params is None:
-        raise RuntimeError("build_search_params_for_alert returned None")
 
     # For under-price alerts, do not apply maxPrice during the scan itself.
-    if alert.max_price is not None:
+    if getattr(alert, "max_price", None) is not None:
         try:
             scan_params = params.model_copy(update={"maxPrice": None})  # Pydantic v2
         except Exception:
@@ -2154,20 +2196,22 @@ def process_alert(alert: Alert, db: Session) -> None:
         scan_params = params
 
     options = run_duffel_scan(scan_params)
-    print(f"[alerts] scan complete alert_id={alert.id} options_count={len(options)} scan_maxPrice={getattr(scan_params, 'maxPrice', None)}")
+    print(
+        f"[alerts] scan complete alert_id={alert.id} "
+        f"options_count={len(options)} scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
+    )
 
     if not options:
-        db.add(AlertRun(
-            id=str(uuid4()),
-            alert_id=alert.id,
-            run_at=now,
-            price_found=None,
-            sent=False,
-            reason="no_results_scan_empty",
-
-        ))
-        alert.last_run_at = now
-        alert.updated_at = now
+        db.add(
+            AlertRun(
+                id=str(uuid4()),
+                alert_id=alert.id,
+                run_at=now,
+                price_found=None,
+                sent=False,
+                reason="no_results_scan_empty",
+            )
+        )
         db.commit()
         return
 
@@ -2175,34 +2219,38 @@ def process_alert(alert: Alert, db: Session) -> None:
     cheapest = options_sorted[0]
     current_price = int(cheapest.price)
 
-        # Stored best price = lowest price_found in AlertRun history
-    best_run = (
-        db.query(AlertRun)
-        .filter(AlertRun.alert_id == alert.id)
-        .filter(AlertRun.price_found.isnot(None))
-        .order_by(AlertRun.price_found.asc())
-        .first()
-    )
-    stored_best_price = int(best_run.price_found) if best_run and best_run.price_found is not None else None
+    # Stored best price: prefer alert.last_price (fast), fallback to historical best run
+    stored_best_price = getattr(alert, "last_price", None)
+    if stored_best_price is None:
+        best_run = (
+            db.query(AlertRun)
+            .filter(AlertRun.alert_id == alert.id)
+            .filter(AlertRun.price_found.isnot(None))
+            .order_by(AlertRun.price_found.asc())
+            .first()
+        )
+        stored_best_price = (
+            int(best_run.price_found)
+            if best_run and best_run.price_found is not None
+            else None
+        )
 
     should_send = False
     send_reason = None
 
-    # Map legacy types, then override to "under_price" if a threshold is set
-    effective_type = alert.alert_type
+    # Normalize alert type, then override to "under_price" if a threshold is set
+    effective_type = getattr(alert, "alert_type", None) or "new_best"
     if effective_type == "price_change":
         effective_type = "new_best"
     elif effective_type == "scheduled_3x":
         effective_type = "summary"
 
-    if alert.max_price is not None:
+    max_price_threshold = getattr(alert, "max_price", None)
+    if max_price_threshold is not None:
         effective_type = "under_price"
 
-    stored_best_price = alert.last_price
-
-    # Deterministic email rules
     if effective_type == "under_price":
-        if alert.max_price is not None and current_price <= int(alert.max_price):
+        if current_price <= int(max_price_threshold):
             should_send = True
             send_reason = "under_price"
         else:
@@ -2212,7 +2260,7 @@ def process_alert(alert: Alert, db: Session) -> None:
         if stored_best_price is None:
             should_send = True
             send_reason = "first_best"
-        elif current_price < stored_best_price:
+        elif current_price < int(stored_best_price):
             should_send = True
             send_reason = "new_best"
         else:
@@ -2230,7 +2278,7 @@ def process_alert(alert: Alert, db: Session) -> None:
 
     if should_send:
         try:
-            if alert.mode == "smart":
+            if getattr(alert, "mode", None) == "smart":
                 send_smart_alert_email(alert, options_sorted, params)
             else:
                 send_alert_email_for_alert(alert, cheapest, params)
@@ -2240,27 +2288,31 @@ def process_alert(alert: Alert, db: Session) -> None:
             sent_flag = False
             send_reason = "email_failed"
 
-    db.add(AlertRun(
-        id=str(uuid4()),
-        alert_id=alert.id,
-        run_at=now,
-        price_found=current_price,
-        sent=sent_flag,
-        reason=send_reason,
-    ))
+    db.add(
+        AlertRun(
+            id=str(uuid4()),
+            alert_id=alert.id,
+            run_at=now,
+            price_found=current_price,
+            sent=sent_flag,
+            reason=send_reason,
+        )
+    )
 
-    if stored_best_price is None or current_price < stored_best_price:
+    # Track best price on the alert record
+    try:
+        if stored_best_price is None or current_price < int(stored_best_price):
+            alert.last_price = current_price
+    except Exception:
         alert.last_price = current_price
 
-        alert.last_run_at = now
-        alert.updated_at = now
-
     if sent_flag:
-        alert.times_sent = (alert.times_sent or 0) + 1
+        alert.times_sent = (getattr(alert, "times_sent", None) or 0) + 1
         alert.last_notified_at = now
         alert.last_notified_price = current_price
 
     db.commit()
+
 
 def run_all_alerts_cycle() -> None:
     if not master_alerts_enabled():
@@ -2280,6 +2332,7 @@ def run_all_alerts_cycle() -> None:
         if not alerts_globally_enabled(db):
             print("[alerts] Global alerts disabled in admin_config, skipping alerts cycle")
             return
+
         # -------------------------------------------------------
         # Expire alerts: if today is after the last departure date
         # Rule: expire when today > (departure_end or departure_start)
@@ -2290,12 +2343,8 @@ def run_all_alerts_cycle() -> None:
         expiring = (
             db.query(Alert)
             .filter(Alert.is_active == True)  # noqa: E712
-            .filter(
-                func.coalesce(Alert.departure_end, Alert.departure_start).isnot(None)
-            )
-            .filter(
-                func.coalesce(Alert.departure_end, Alert.departure_start) < today
-            )
+            .filter(func.coalesce(Alert.departure_end, Alert.departure_start).isnot(None))
+            .filter(func.coalesce(Alert.departure_end, Alert.departure_start) < today)
             .all()
         )
 
@@ -2303,29 +2352,31 @@ def run_all_alerts_cycle() -> None:
             for a in expiring:
                 a.is_active = False
                 a.updated_at = now
+                # If you later add expired_at, this will auto-use it without breaking now
+                if hasattr(a, "expired_at"):
+                    try:
+                        setattr(a, "expired_at", now)
+                    except Exception:
+                        pass
             db.commit()
             print(f"[alerts] Expired {len(expiring)} alerts (today={today})")
-        
+
         alerts = db.query(Alert).filter(Alert.is_active == True).all()  # noqa: E712
         print(f"[alerts] Found {len(alerts)} active alerts before cadence filtering")
-
-        # Plan enforcement: scheduler frequency by plan_checks_per_day
-        # 1/day => 24h cadence, 3/day => 8h cadence
-        def _min_interval_seconds_for_checks_per_day(n: int) -> int:
-            n = int(n or 1)
-            if n <= 1:
-                return 24 * 60 * 60
-            if n >= 3:
-                return 8 * 60 * 60
-            # fallback: evenly divide the day
-            return int((24 * 60 * 60) / n)
 
         eligible_alerts = []
         skipped = 0
 
         for a in alerts:
             try:
-                user = db.query(AppUser).filter(AppUser.email == a.user_email).first()
+                user = _get_user_for_alert(db, a)
+
+                # If user is missing, fail open and attempt the alert,
+                # process_alert will record "no_user_for_alert"
+                if not user:
+                    eligible_alerts.append(a)
+                    continue
+
                 plan_tier = (getattr(user, "plan_tier", None) or "").lower()
 
                 # Admin alerts always run
@@ -2344,18 +2395,21 @@ def run_all_alerts_cycle() -> None:
                         continue
 
                 eligible_alerts.append(a)
+
             except Exception:
                 # If anything is weird, fail open to avoid dropping alerts silently
                 eligible_alerts.append(a)
 
-        print(f"[alerts] Running alerts cycle for {len(eligible_alerts)} eligible alerts (skipped {skipped} due to plan cadence)")
+        print(
+            f"[alerts] Running alerts cycle for {len(eligible_alerts)} eligible alerts "
+            f"(skipped {skipped} due to plan cadence)"
+        )
 
         import traceback
 
         for alert in eligible_alerts:
             try:
                 process_alert(alert, db)
-                
             except Exception as e:
                 print(f"[alerts] Error processing alert {alert.id}: {e}")
                 traceback.print_exc()
