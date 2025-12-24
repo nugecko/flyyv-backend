@@ -2959,6 +2959,15 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
 # SECTION START: ALERT ROUTES
 # =====================================================================
 
+def _alert_state(a: Alert) -> str:
+    # expired if today is after the last departure date
+    today = datetime.utcnow().date()
+    end = a.departure_end or a.departure_start
+    if end and today > end:
+        return "expired"
+    return "active" if a.is_active else "paused"
+
+
 @app.post("/alerts", response_model=AlertOut)
 def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-User-Id")):
     db = SessionLocal()
@@ -2978,7 +2987,8 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
 
         max_passengers = get_config_int("MAX_PASSENGERS", 4)
         pax = max(1, int(payload.passengers or 1))
-                # Plan enforcement: active alert limit (create)
+
+        # Plan enforcement: active alert limit (create)
         app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
         if not app_user:
             raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
@@ -2986,8 +2996,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         active_alerts = (
             db.query(Alert)
             .filter(
-                ((Alert.user_external_id == x_user_id) |
-                 (Alert.user_email == app_user.email)),
+                ((Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email)),
                 Alert.is_active == True,  # noqa: E712
             )
             .count()
@@ -3064,6 +3073,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
             passengers=_derive_alert_passengers(alert),
             times_sent=alert.times_sent,
             is_active=alert.is_active,
+            state=_alert_state(alert),
             last_price=alert.last_price,
             best_price=None,
             last_run_at=alert.last_run_at,
@@ -3076,7 +3086,8 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         db.close()
 
 
-from fastapi import Request  # add near other fastapi imports if not already present
+from fastapi import Request  # keep near other fastapi imports if not already present
+
 
 @app.get("/alerts", response_model=List[AlertOut])
 def get_alerts(
@@ -3100,7 +3111,6 @@ def get_alerts(
         if not app_user:
             raise HTTPException(status_code=403, detail="Unknown user")
 
-        # Alerts are still owned by user_email today
         query = db.query(Alert).filter(
             (Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email)
         )
@@ -3115,7 +3125,6 @@ def get_alerts(
         best_price_by_alert_id = {}
 
         if alert_ids:
-            # One query to fetch best (lowest) price_found per alert_id
             best_runs = (
                 db.query(AlertRun.alert_id, func.min(AlertRun.price_found).label("best_price"))
                 .filter(AlertRun.alert_id.in_(alert_ids))
@@ -3144,6 +3153,7 @@ def get_alerts(
                     passengers=_derive_alert_passengers(a),
                     times_sent=a.times_sent,
                     is_active=a.is_active,
+                    state=_alert_state(a),
                     last_price=a.last_price,
                     best_price=best_price_by_alert_id.get(a.id),
                     last_run_at=a.last_run_at,
@@ -3158,6 +3168,7 @@ def get_alerts(
     finally:
         db.close()
 
+
 @app.patch("/alerts/{alert_id}")
 def update_alert(
     alert_id: str,
@@ -3168,20 +3179,19 @@ def update_alert(
     db = SessionLocal()
     try:
         # Auth, resolve user, do not trust email param
-        app_user = None
-        resolved_email = None
-
-        if x_user_id:
-            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user:
-                resolved_email = app_user.email
-
-        if not resolved_email:
+        if not x_user_id:
             raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
+
+        app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        if not app_user:
+            raise HTTPException(status_code=403, detail="Unknown user")
 
         alert = (
             db.query(Alert)
-            .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
+            .filter(
+                Alert.id == alert_id,
+                (Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email),
+            )
             .first()
         )
         if not alert:
@@ -3194,7 +3204,10 @@ def update_alert(
 
             active_count = (
                 db.query(Alert)
-                .filter(Alert.user_email == resolved_email, Alert.is_active == True)  # noqa: E712
+                .filter(
+                    ((Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email)),
+                    Alert.is_active == True,  # noqa: E712
+                )
                 .count()
             )
 
@@ -3239,6 +3252,7 @@ def update_alert(
     finally:
         db.close()
 
+
 @app.delete("/alerts/{alert_id}")
 def delete_alert(
     alert_id: str,
@@ -3247,19 +3261,19 @@ def delete_alert(
 ):
     db = SessionLocal()
     try:
-        # Auth, resolve user, do not trust email param
-        resolved_email = None
-        if x_user_id:
-            app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
-            if app_user:
-                resolved_email = app_user.email
-
-        if not resolved_email:
+        if not x_user_id:
             raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED"})
+
+        app_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        if not app_user:
+            raise HTTPException(status_code=403, detail="Unknown user")
 
         alert = (
             db.query(Alert)
-            .filter(Alert.id == alert_id, Alert.user_email == resolved_email)
+            .filter(
+                Alert.id == alert_id,
+                (Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email),
+            )
             .first()
         )
         if not alert:
