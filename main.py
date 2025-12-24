@@ -2887,10 +2887,14 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
             # Count alerts by current ownership (user_email)
             active_alerts = (
                 db.query(Alert)
-                .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
+                .filter(
+                    ((Alert.user_external_id == app_user.external_id) |
+                     (Alert.user_email == app_user.email)),
+                    Alert.is_active == True,  # noqa: E712
+                )
                 .count()
             )
-            
+    
     finally:
         db.close()
 
@@ -2969,7 +2973,11 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
 
         active_alerts = (
             db.query(Alert)
-            .filter(Alert.user_email == app_user.email, Alert.is_active == True)  # noqa: E712
+            .filter(
+                ((Alert.user_external_id == x_user_id) |
+                 (Alert.user_email == app_user.email)),
+                Alert.is_active == True,  # noqa: E712
+            )
             .count()
         )
 
