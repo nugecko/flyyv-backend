@@ -2898,7 +2898,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         limit = int(getattr(app_user, "plan_active_alert_limit", 1) or 1)
 
         # Creating an alert always creates it active in v1
-        if active_count >= limit:
+        if active_alerts >= limit:
             raise HTTPException(status_code=403, detail={"code": "ALERT_LIMIT_REACHED"})
 
         # Plan enforcement: departure window limit (create)
