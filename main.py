@@ -2935,6 +2935,9 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         if pax > max_passengers:
             pax = max_passengers
 
+        dep_start = payload.departure_start
+        dep_end = payload.departure_end or dep_start
+
         alert = Alert(
             id=alert_id,
             user_email=app_user.email,
@@ -2942,8 +2945,8 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
             destination=payload.destination,
             cabin=payload.cabin,
             search_mode=search_mode_value,
-            departure_start=payload.departure_start,
-            departure_end=payload.departure_end,
+            departure_start=dep_start,
+            departure_end=dep_end,
             return_start=payload.return_start,
             return_end=payload.return_end,
             alert_type=("under_price" if payload.max_price is not None else payload.alert_type),
