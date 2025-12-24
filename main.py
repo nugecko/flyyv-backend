@@ -3089,7 +3089,10 @@ def get_alerts(
             raise HTTPException(status_code=403, detail="Unknown user")
 
         # Alerts are still owned by user_email today
-        query = db.query(Alert).filter(Alert.user_email == app_user.email)
+        query = db.query(Alert).filter(
+            (Alert.user_external_id == x_user_id) | (Alert.user_email == app_user.email)
+        )
+
         if not include_inactive:
             query = query.filter(Alert.is_active == True)  # noqa: E712
 
