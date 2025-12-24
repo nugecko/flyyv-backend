@@ -170,13 +170,18 @@ def get_config_bool(key: str, default_value: bool) -> bool:
 # SECTION END: ADMIN CONFIG HELPERS
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: Pydantic MODELS
 # =====================================================================
 
+# =====================================================================
+# Alerts, v1 API models (used by /alerts routes)
+# =====================================================================
+
 class AlertCreate(BaseModel):
-    email: str
+    # Legacy field, not trusted for auth or ownership, kept for backward compatibility
+    email: Optional[str] = None
+
     origin: str
     destination: str
     cabin: str
@@ -193,9 +198,13 @@ class AlertCreate(BaseModel):
     mode: Optional[str] = "single"  # "single" or "smart"
     passengers: Optional[int] = 1
 
+
 class AlertOut(BaseModel):
     id: str
+
+    # Still returned for UI display for now, ownership is via X-User-Id and alerts.user_external_id
     email: Optional[str] = None
+
     origin: str
     destination: str
     cabin: str
@@ -213,6 +222,9 @@ class AlertOut(BaseModel):
     passengers: int
     times_sent: int
     is_active: bool
+
+    # Computed UI state
+    state: str  # "active" | "paused" | "expired"
 
     last_price: Optional[int] = None
     best_price: Optional[int] = None
