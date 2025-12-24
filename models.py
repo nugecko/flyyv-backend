@@ -96,6 +96,7 @@ class Alert(Base):
 
     id = Column(String, primary_key=True, index=True)
     user_email = Column(String, index=True, nullable=False)
+    user_external_id = Column(String, nullable=True, index=True)
 
     origin = Column(String, nullable=False)
     destination = Column(String, nullable=False)
