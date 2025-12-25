@@ -550,7 +550,10 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     nights_val = _compute_trip_nights(alert)
     nights_text = str(nights_val) if nights_val else None
 
-    analysed_combinations = len(pairs_summary)
+    # For display, always prefer the alert's theoretical combinations
+    # This keeps the hourly email consistent with the confirmation email
+    theoretical_combinations = _compute_theoretical_combinations(alert)
+    analysed_combinations = theoretical_combinations if theoretical_combinations is not None else len(pairs_summary)
 
     best_price_overall = None
     if pairs_summary:
