@@ -2202,6 +2202,17 @@ def process_alert(alert: Alert, db: Session) -> None:
     alert.updated_at = now
     db.commit()
 
+    # Prevent duplicate processing within the same cron window
+    if alert.last_checked_at is not None:
+        age = (now - alert.last_checked_at).total_seconds()
+        if age < 300:
+            print(f"[alerts] skip duplicate run alert_id={alert.id} age_seconds={int(age)}")
+            return
+
+    alert.last_checked_at = now
+    alert.updated_at = now
+    db.commit()
+
     params = build_search_params_for_alert(alert)
 
     # For under-price alerts, do not apply maxPrice during the scan itself.
@@ -2218,14 +2229,14 @@ def process_alert(alert: Alert, db: Session) -> None:
     else:
         scan_params = params
 
-    import json
+        import json
     from types import SimpleNamespace
 
     cache_hit = False
     options = None
 
-    # Cache read, alert only cache, reuse if younger than 8 hours
-    if getattr(alert, "cache_expires_at", None) and alert.cache_expires_at > now and getattr(alert, "cache_payload_json", None):
+    # Cache read, alert-only cache, reuse if still valid
+    if alert.cache_expires_at and alert.cache_expires_at > now and alert.cache_payload_json:
         try:
             cached_list = json.loads(alert.cache_payload_json) or []
             options = [SimpleNamespace(**d) for d in cached_list]
@@ -2233,7 +2244,9 @@ def process_alert(alert: Alert, db: Session) -> None:
         except Exception as e:
             print(f"[alerts] cache read failed alert_id={alert.id}: {e}")
             options = None
+            cache_hit = False
 
+    # Cache miss, run Duffel
     if options is None:
         options = run_duffel_scan(scan_params)
 
@@ -2258,11 +2271,6 @@ def process_alert(alert: Alert, db: Session) -> None:
         f"[alerts] scan complete alert_id={alert.id} "
         f"options_count={len(options)} cache_hit={cache_hit} "
         f"scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
-    )
-
-    print(
-        f"[alerts] scan complete alert_id={alert.id} "
-        f"options_count={len(options)} scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
     )
 
     if not options:
