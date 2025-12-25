@@ -74,6 +74,7 @@ class AppUser(Base):
         onupdate=datetime.utcnow,
     )
 
+
 # =======================================
 # SECTION: EARLY ACCESS SUBSCRIBERS
 # =======================================
@@ -95,9 +96,12 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = Column(String, primary_key=True, index=True)
+
+    # Ownership
     user_email = Column(String, index=True, nullable=False)
     user_external_id = Column(String, nullable=True, index=True)
 
+    # Search parameters
     origin = Column(String, nullable=False)
     destination = Column(String, nullable=False)
     cabin = Column(String, nullable=False)
@@ -117,7 +121,8 @@ class Alert(Base):
     mode = Column(String(32), nullable=False, default="single")
 
     passengers = Column(Integer, nullable=False, default=1)
-    
+
+    # Pricing and run tracking
     last_price = Column(Integer, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
 
