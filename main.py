@@ -2260,7 +2260,9 @@ def process_alert(alert: Alert, db: Session) -> None:
 
         try:
             alert.cache_created_at = now
-            alert.cache_expires_at = now + timedelta(hours=8)
+            checks_per_day = max(1, user.plan_checks_per_day or 1)
+            ttl_hours = 24 / checks_per_day
+            alert.cache_expires_at = now + timedelta(hours=ttl_hours)
             alert.cache_payload_json = json.dumps([_opt_to_dict(o) for o in options])
             alert.updated_at = now
             db.commit()
