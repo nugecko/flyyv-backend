@@ -2190,6 +2190,17 @@ def process_alert(alert: Alert, db: Session) -> None:
         )
         db.commit()
         return
+        # Prevent duplicate processing in the same cron tick or overlap
+    
+    if getattr(alert, "last_checked_at", None) is not None:
+        age_seconds = (now - alert.last_checked_at).total_seconds()
+        if age_seconds < 300:
+            print(f"[alerts] skip recent_check alert_id={alert.id} age_seconds={int(age_seconds)}")
+            return
+
+    alert.last_checked_at = now
+    alert.updated_at = now
+    db.commit()
 
     params = build_search_params_for_alert(alert)
 
@@ -2207,7 +2218,48 @@ def process_alert(alert: Alert, db: Session) -> None:
     else:
         scan_params = params
 
-    options = run_duffel_scan(scan_params)
+    import json
+    from types import SimpleNamespace
+
+    cache_hit = False
+    options = None
+
+    # Cache read, alert only cache, reuse if younger than 8 hours
+    if getattr(alert, "cache_expires_at", None) and alert.cache_expires_at > now and getattr(alert, "cache_payload_json", None):
+        try:
+            cached_list = json.loads(alert.cache_payload_json) or []
+            options = [SimpleNamespace(**d) for d in cached_list]
+            cache_hit = True
+        except Exception as e:
+            print(f"[alerts] cache read failed alert_id={alert.id}: {e}")
+            options = None
+
+    if options is None:
+        options = run_duffel_scan(scan_params)
+
+        # Cache write, store even empty to avoid hammering Duffel for dead windows
+        def _opt_to_dict(o):
+            if hasattr(o, "model_dump"):
+                return o.model_dump()
+            if hasattr(o, "dict"):
+                return o.dict()
+            return dict(getattr(o, "__dict__", {}))
+
+        try:
+            alert.cache_created_at = now
+            alert.cache_expires_at = now + timedelta(hours=8)
+            alert.cache_payload_json = json.dumps([_opt_to_dict(o) for o in options])
+            alert.updated_at = now
+            db.commit()
+        except Exception as e:
+            print(f"[alerts] cache write failed alert_id={alert.id}: {e}")
+
+    print(
+        f"[alerts] scan complete alert_id={alert.id} "
+        f"options_count={len(options)} cache_hit={cache_hit} "
+        f"scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
+    )
+
     print(
         f"[alerts] scan complete alert_id={alert.id} "
         f"options_count={len(options)} scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
