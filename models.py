@@ -96,7 +96,6 @@ class Alert(Base):
 
     id = Column(String, primary_key=True, index=True)
     user_email = Column(String, index=True, nullable=False)
-    user_email = Column(String, index=True)
     user_external_id = Column(String, nullable=True, index=True)
 
     origin = Column(String, nullable=False)
@@ -125,7 +124,7 @@ class Alert(Base):
     # Duplicate guard, prevents double runs in the same tick
     last_checked_at = Column(DateTime, nullable=True)
 
-    # Alert only cache, reuse results for up to 8 hours
+    # Alert-only cache, reuse results for up to 8 hours
     cache_created_at = Column(DateTime, nullable=True)
     cache_expires_at = Column(DateTime, nullable=True)
     cache_payload_json = Column(Text, nullable=True)  # JSON string
