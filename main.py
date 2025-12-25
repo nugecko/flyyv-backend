@@ -2190,25 +2190,15 @@ def process_alert(alert: Alert, db: Session) -> None:
         )
         db.commit()
         return
-        # Prevent duplicate processing in the same cron tick or overlap
     
+    # Prevent duplicate processing within a short window
     if getattr(alert, "last_checked_at", None) is not None:
         age_seconds = (now - alert.last_checked_at).total_seconds()
         if age_seconds < 300:
             print(f"[alerts] skip recent_check alert_id={alert.id} age_seconds={int(age_seconds)}")
             return
-
-    alert.last_checked_at = now
-    alert.updated_at = now
-    db.commit()
-
-    # Prevent duplicate processing within the same cron window
-    if alert.last_checked_at is not None:
-        age = (now - alert.last_checked_at).total_seconds()
-        if age < 300:
-            print(f"[alerts] skip duplicate run alert_id={alert.id} age_seconds={int(age)}")
-            return
-
+            
+    # Stamp last_checked_at once, after passing the guard
     alert.last_checked_at = now
     alert.updated_at = now
     db.commit()
