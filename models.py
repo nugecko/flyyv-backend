@@ -122,6 +122,14 @@ class Alert(Base):
     last_price = Column(Integer, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
 
+    # Duplicate guard, prevents double runs in the same tick
+    last_checked_at = Column(DateTime, nullable=True)
+
+    # Alert only cache, reuse results for up to 8 hours
+    cache_created_at = Column(DateTime, nullable=True)
+    cache_expires_at = Column(DateTime, nullable=True)
+    cache_payload_json = Column(Text, nullable=True)  # JSON string
+
     # Email notification tracking
     last_notified_at = Column(DateTime, nullable=True)
     last_notified_price = Column(Integer, nullable=True)
