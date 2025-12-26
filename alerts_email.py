@@ -1,11 +1,11 @@
 import os
 import smtplib
 from email.message import EmailMessage
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from typing import List, Dict, Tuple, Any, Optional
+from urllib.parse import urlencode
 
 from fastapi import HTTPException
-from urllib.parse import urlencode
 
 # =====================================================================
 # SECTION START: SMTP CONFIG AND CONSTANTS
@@ -23,8 +23,9 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "https://flyyv.com")
 # SECTION END: SMTP CONFIG AND CONSTANTS
 # =====================================================================
 
+
 # =====================================================================
-# SECTION START: SMALL UTILITIES
+# SECTION START: LOW LEVEL UTILS
 # =====================================================================
 
 def _smtp_ready() -> bool:
@@ -46,8 +47,8 @@ def _get_attr(obj, name: str, default=None):
 def _derive_passengers(alert=None, params=None) -> int:
     """
     Priority:
-    1) alert.passengers (if present in DB model)
-    2) params.passengers (if SearchParams used)
+    1) alert.passengers (if present)
+    2) params.passengers (if present)
     3) default 1
     """
     if alert is not None:
@@ -67,14 +68,18 @@ def _passengers_label(passengers: int) -> str:
     return "1 passenger" if passengers == 1 else f"{passengers} passengers"
 
 
-def _price_basis_line(passengers: int) -> str:
-    # Duffel total_amount is per passenger in many cases, but your UI is treating shown
-    # prices as totals. Keep your current product stance consistent:
-    # "total for all passengers"
-    return "Prices shown are the total for all passengers."
+def _price_basis_line() -> str:
+    """
+    Product stance for emails:
+    - All prices shown are per passenger
+    """
+    return "Prices shown are per passenger."
 
 
 def _is_flex_alert(alert) -> bool:
+    """
+    Determines if alert represents a flexible window (FlyyvFlex) style alert.
+    """
     search_mode = (_get_attr(alert, "search_mode", "") or "").strip().lower()
     mode = (_get_attr(alert, "mode", "") or "").strip().lower()
     return (mode == "smart") or (search_mode == "flexible")
@@ -82,7 +87,11 @@ def _is_flex_alert(alert) -> bool:
 
 def _compute_trip_nights(alert) -> Optional[int]:
     """
-    Returns fixed nights if the alert implies a fixed trip length, else None.
+    Attempts to derive a fixed trip length in nights.
+
+    Priority:
+    1) return_start - departure_start (if both present)
+    2) alert.nights (if present)
     """
     dep_start = _get_attr(alert, "departure_start", None)
     ret_start = _get_attr(alert, "return_start", None)
@@ -96,16 +105,19 @@ def _compute_trip_nights(alert) -> Optional[int]:
 
     nights = _get_attr(alert, "nights", None)
     if nights is not None:
-        return _safe_int(nights, 0) or None
+        n = _safe_int(nights, 0)
+        return n if n > 0 else None
 
     return None
 
 
 def _compute_theoretical_combinations(alert) -> Optional[int]:
     """
-    For flexible windows:
-    - If fixed nights, each departure day in [departure_start..departure_end] is one combination.
-    - If not fixed nights, we cannot compute reliably here, return None.
+    For FlyyvFlex with fixed nights:
+      valid_departures = dep_start .. (dep_end - nights) inclusive
+      combos = max(0, (dep_end - dep_start).days - nights + 1)
+
+    Returns None if not computable.
     """
     if not _is_flex_alert(alert):
         return None
@@ -118,8 +130,6 @@ def _compute_theoretical_combinations(alert) -> Optional[int]:
         return None
 
     try:
-        # FlyyvFlex with fixed nights:
-        # valid departures are dep_start .. (dep_end - nights) inclusive
         total_days = (dep_end - dep_start).days
         valid = total_days - int(nights) + 1
         return max(0, int(valid))
@@ -127,14 +137,18 @@ def _compute_theoretical_combinations(alert) -> Optional[int]:
         return None
 
 # =====================================================================
-# SECTION END: SMALL UTILITIES
+# SECTION END: LOW LEVEL UTILS
 # =====================================================================
+
 
 # =====================================================================
 # SECTION START: GENERIC SINGLE EMAIL SENDER
 # =====================================================================
 
 def send_single_email(to_email: str, subject: str, body: str) -> None:
+    """
+    Generic plain text sender, used for simple operational emails.
+    """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
 
@@ -153,14 +167,24 @@ def send_single_email(to_email: str, subject: str, body: str) -> None:
 # SECTION END: GENERIC SINGLE EMAIL SENDER
 # =====================================================================
 
+
 # =====================================================================
-# SECTION START: HELPER LINK BUILDERS
+# SECTION START: LINK BUILDERS
 # =====================================================================
 
-def build_flyyv_link(alert_or_params, departure: str, return_date: str, passengers: Optional[int] = None) -> str:
+def build_flyyv_link(
+    alert_or_params,
+    departure: str,
+    return_date: str,
+    passengers: Optional[int] = None,
+    alert_run_id: Optional[str] = None,
+) -> str:
     """
     Deep link to a single date pair drilldown.
     Must use /SearchFlyyv with autoSearch=1 and searchMode=single.
+
+    Optional:
+    - alert_run_id: once snapshots exist, FE can render exact run results
     """
     base = FRONTEND_BASE_URL.rstrip("/")
 
@@ -187,15 +211,20 @@ def build_flyyv_link(alert_or_params, departure: str, return_date: str, passenge
     if alert_id is not None:
         qp["alertId"] = str(alert_id)
 
+    if alert_run_id:
+        qp["alertRunId"] = str(alert_run_id)
+
     return f"{base}/SearchFlyyv?{urlencode(qp)}"
 
 
-def build_alert_search_link(alert) -> str:
+def build_alert_search_link(alert, alert_run_id: Optional[str] = None) -> str:
     """
     Deep link to recreate the original alert window.
+
+    Optional:
+    - alert_run_id: once snapshots exist, FE can render exact run results
     """
     base = FRONTEND_BASE_URL.rstrip("/")
-
     is_flex = _is_flex_alert(alert)
     pax = _derive_passengers(alert=alert, params=None)
 
@@ -216,28 +245,28 @@ def build_alert_search_link(alert) -> str:
         "alertId": str(_get_attr(alert, "id", "")),
     }
 
-    # Include return window if available (flex alerts often use this to compute nights on FE)
     if ret_start:
         qp["returnStart"] = ret_start.isoformat()
     if ret_end:
         qp["returnEnd"] = ret_end.isoformat()
 
-    # Include nights if we can derive it
     nights = _compute_trip_nights(alert)
     if nights:
         qp["nights"] = str(nights)
 
-    # Drop empty values
-    qp = {k: v for k, v in qp.items() if v not in ("", None)}
+    if alert_run_id:
+        qp["alertRunId"] = str(alert_run_id)
 
+    qp = {k: v for k, v in qp.items() if v not in ("", None)}
     return f"{base}/SearchFlyyv?{urlencode(qp)}"
 
 # =====================================================================
-# SECTION END: HELPER LINK BUILDERS
+# SECTION END: LINK BUILDERS
 # =====================================================================
 
+
 # =====================================================================
-# SECTION START: EMAIL HELPERS, SHARED BY ALL ALERT EMAILS
+# SECTION START: DISPLAY HELPERS
 # =====================================================================
 
 def _cabin_display_label(cabin) -> str:
@@ -268,6 +297,9 @@ def _pill_cabin_label(cabin) -> str:
 
 
 def _fmt_money_gbp(value) -> str:
+    """
+    Formats money for display. Current behaviour: integer pounds, no decimals.
+    """
     try:
         return f"£{int(float(value))}"
     except Exception:
@@ -275,6 +307,9 @@ def _fmt_money_gbp(value) -> str:
 
 
 def _fmt_date_label(iso_or_dt) -> str:
+    """
+    Converts ISO string or datetime/date into "DD Mon YYYY".
+    """
     try:
         if isinstance(iso_or_dt, str):
             dt = datetime.fromisoformat(iso_or_dt)
@@ -284,9 +319,8 @@ def _fmt_date_label(iso_or_dt) -> str:
     except Exception:
         return "Unknown date"
 
-
 # =====================================================================
-# SECTION END: EMAIL HELPERS, SHARED BY ALL ALERT EMAILS
+# SECTION END: DISPLAY HELPERS
 # =====================================================================
 
 
@@ -297,7 +331,8 @@ def _fmt_date_label(iso_or_dt) -> str:
 def send_alert_email_for_alert(alert, cheapest, params) -> None:
     """
     One off alert email:
-    single date pair, simple format.
+    - single date pair
+    - single cheapest option
     """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
@@ -330,7 +365,7 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
     airline_code = getattr(cheapest, "airlineCode", None) or ""
     airline_code_txt = f" ({airline_code})" if airline_code else ""
 
-    subject = f"Flyyv Alert: {origin} \u2192 {destination} from {price_label} per passenger"
+    subject = f"Flyyv Alert: {origin} → {destination} from {price_label} per passenger"
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -343,9 +378,9 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
 
     lines: List[str] = []
     lines.append("Flyyv Alert")
-    lines.append(f"Route: {origin} \u2192 {destination}, {cabin_title}")
+    lines.append(f"Route: {origin} → {destination}, {cabin_title}")
     lines.append(f"Passengers: {passengers}")
-    lines.append(_price_basis_line(passengers))
+    lines.append(_price_basis_line())
     lines.append(f"Dates: {dep_label} to {ret_label}")
     lines.append("")
     lines.append(f"Best price found: {price_label} per passenger with {airline_label}{airline_code_txt}")
@@ -397,7 +432,7 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
             SECTION START: SUMMARY
             ====================================================== -->
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 14px 0;">
-              {origin} \u2192 {destination}, <strong>{cabin_title}</strong>, {passenger_text}
+              {origin} → {destination}, <strong>{cabin_title}</strong>, {passenger_text}
             </div>
             <!-- =====================================================
             SECTION END: SUMMARY
@@ -472,17 +507,14 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
 
 
 # =====================================================================
-# SECTION START: SMART ALERT SUMMARY EMAIL
+# SECTION START: SMART ALERT SUMMARY EMAIL (FLYYVFLEX)
 # =====================================================================
 
 def send_smart_alert_email(alert, options: List, params) -> None:
     """
     FlyyvFlex results email:
-    summary of multiple date pairs in a flexible window.
-
-    Output:
     - Top 5 cheapest date combinations
-    - Per-row CTA drills into single date pair results
+    - Per-row CTA drills into a single date pair
     - Full results CTA recreates original window
     """
     if not _smtp_ready():
@@ -503,13 +535,25 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     cabin_title = _cabin_display_label(cabin)
     cabin_pill = _pill_cabin_label(cabin)
 
+    # ================================================================
+    # SECTION START: GROUP OPTIONS BY DATE PAIR
+    # ================================================================
+
     grouped: Dict[Tuple[str, str], List] = {}
     for opt in options:
         key = (opt.departureDate, opt.returnDate)
         grouped.setdefault(key, []).append(opt)
 
+    # ================================================================
+    # SECTION END: GROUP OPTIONS BY DATE PAIR
+    # ================================================================
+
     any_under = False
     pairs_summary: List[Dict[str, Any]] = []
+
+    # ================================================================
+    # SECTION START: BUILD PER-PAIR SUMMARY
+    # ================================================================
 
     for dep_iso, ret_iso in grouped.keys():
         flights = grouped[(dep_iso, ret_iso)]
@@ -544,30 +588,40 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             }
         )
 
+    # ================================================================
+    # SECTION END: BUILD PER-PAIR SUMMARY
+    # ================================================================
+
     start_label = params.earliestDeparture.strftime("%d %b %Y")
     end_label = params.latestDeparture.strftime("%d %b %Y")
 
     nights_val = _compute_trip_nights(alert)
     nights_text = str(nights_val) if nights_val else None
 
-    # For display, always prefer the alert's theoretical combinations
-    # This keeps the hourly email consistent with the confirmation email
     theoretical_combinations = _compute_theoretical_combinations(alert)
     analysed_combinations = theoretical_combinations if theoretical_combinations is not None else len(pairs_summary)
 
-    best_price_overall = None
+    best_price_overall: Optional[int] = None
     if pairs_summary:
         try:
             best_price_overall = int(min(pairs_summary, key=lambda x: x["cheapestPrice"])["cheapestPrice"])
         except Exception:
             best_price_overall = None
 
+    # ================================================================
+    # SECTION START: SUBJECT
+    # ================================================================
+
     if best_price_overall is not None:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} from £{best_price_overall} per passenger"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} from £{best_price_overall} per passenger"
     elif threshold is not None and any_under:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} fares under £{int(threshold)} per passenger"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(threshold)} per passenger"
     else:
-        subject = f"FlyyvFlex Alert: {origin} \u2192 {destination} update"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} update"
+
+    # ================================================================
+    # SECTION END: SUBJECT
+    # ================================================================
 
     top_pairs = [p for p in pairs_summary if p.get("cheapestPrice") is not None]
     top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
@@ -585,9 +639,9 @@ def send_smart_alert_email(alert, options: List, params) -> None:
 
     lines: List[str] = []
     lines.append("FlyyvFlex Smart Search Alert")
-    lines.append(f"Route: {origin} \u2192 {destination}, {cabin_title}")
+    lines.append(f"Route: {origin} → {destination}, {cabin_title}")
     lines.append(f"Passengers: {passengers}")
-    lines.append("Prices shown are per passenger")
+    lines.append(_price_basis_line())
     if nights_text:
         lines.append(f"Trip length: {nights_text} nights")
     lines.append(f"Date window scanned: {start_label} to {end_label}")
@@ -629,7 +683,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     # ================================================================
 
     # ================================================================
-    # SECTION START: TOP 5 ROWS HTML (TABLE BASED, GMAIL SAFE)
+    # SECTION START: TOP 5 ROWS HTML
     # ================================================================
 
     rows_html = ""
@@ -668,7 +722,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
                   ============================================ -->
                   <td style="padding:14px;vertical-align:top;">
                     <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:4px;">
-                      {origin} \u2192 {destination}
+                      {origin} → {destination}
                     </div>
 
                     <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">
@@ -763,7 +817,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             SECTION START: MAIN TITLE
             ====================================================== -->
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:900;margin:0 0 10px 0;">
-              Top {cabin_title} deals for {passenger_text} going from {origin} \u2192 {destination}
+              Top {cabin_title} deals for {passenger_text} going from {origin} → {destination}
             </div>
             <!-- =====================================================
             SECTION END: MAIN TITLE
@@ -785,7 +839,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 12px 0;">
               Passengers: <strong>{passenger_text}</strong><br>
-              Prices shown are per passenger
+              {_price_basis_line()}
             </div>
             <!-- =====================================================
             SECTION END: META DETAILS
@@ -895,7 +949,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
         server.send_message(msg)
 
 # =====================================================================
-# SECTION END: SMART ALERT SUMMARY EMAIL
+# SECTION END: SMART ALERT SUMMARY EMAIL (FLYYVFLEX)
 # =====================================================================
 
 
@@ -942,7 +996,7 @@ def send_alert_confirmation_email(alert) -> None:
     cabin_title = _cabin_display_label(cabin)
     cabin_pill = _pill_cabin_label(cabin)
 
-    subject = f"{email_type_label}: {origin} \u2192 {destination} | {dep_start_label} to {dep_end_label} | {trip_length_label}"
+    subject = f"{email_type_label}: {origin} → {destination} | {dep_start_label} to {dep_end_label} | {trip_length_label}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -956,10 +1010,10 @@ def send_alert_confirmation_email(alert) -> None:
     text_body = (
         f"{email_type_label}\n\n"
         "Your alert is active.\n\n"
-        f"Route: {origin} \u2192 {destination}\n"
+        f"Route: {origin} → {destination}\n"
         f"Cabin: {cabin_title}\n"
         f"Passengers: {passengers}\n"
-        f"{_price_basis_line(passengers)}\n"
+        f"{_price_basis_line()}\n"
         f"Departure window: {dep_window_label}\n"
         f"Trip length: {trip_length_label}\n"
         + (f"Combinations in your window: {theoretical_combinations}\n" if theoretical_combinations else "")
@@ -1009,7 +1063,7 @@ def send_alert_confirmation_email(alert) -> None:
             SECTION START: SUMMARY
             ====================================================== -->
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 12px 0;">
-              We are watching <strong>{origin} \u2192 {destination}</strong> and will email you when prices match your alert conditions.
+              We are watching <strong>{origin} → {destination}</strong> and will email you when prices match your alert conditions.
             </div>
             <!-- =====================================================
             SECTION END: SUMMARY
@@ -1020,7 +1074,7 @@ def send_alert_confirmation_email(alert) -> None:
             ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 16px 0;">
               Passengers: <strong>{_passengers_label(passengers)}</strong><br>
-              {_price_basis_line(passengers)}
+              {_price_basis_line()}
             </div>
             <!-- =====================================================
             SECTION END: META DETAILS
@@ -1032,7 +1086,7 @@ def send_alert_confirmation_email(alert) -> None:
             <div style="margin:0 0 18px 0;">
 
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
-                {origin} \u2192 {destination}
+                {origin} → {destination}
               </span>
 
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:700;margin-right:8px;margin-bottom:8px;">
@@ -1141,6 +1195,7 @@ def send_alert_confirmation_email(alert) -> None:
 # =====================================================================
 # SECTION END: ALERT CONFIRMATION EMAIL
 # =====================================================================
+
 
 # =====================================================================
 # SECTION START: EARLY ACCESS WELCOME EMAIL
