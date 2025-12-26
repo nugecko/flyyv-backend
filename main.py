@@ -2990,7 +2990,7 @@ def get_alert_run_snapshot(
             SELECT
                 ar.id                   AS alert_run_id,
                 ar.alert_id             AS alert_id,
-                ar.created_at           AS created_at,
+                ar.run_at               AS created_at,
                 ars.best_price_per_pax  AS best_price_per_pax,
                 ars.currency            AS currency,
                 ars.params              AS params,
