@@ -2462,9 +2462,9 @@ def process_alert(alert: Alert, db: Session) -> None:
         try:
             if getattr(alert, "mode", None) == "smart":
                 # NOTE: we will pass alert_run_id into the email builder in the next tiny edit.
-                send_smart_alert_email(alert, options_sorted, params)
+                send_smart_alert_email(alert, options_sorted, params, alert_run_id=alert_run_id)
             else:
-                send_alert_email_for_alert(alert, cheapest, params)
+                send_alert_email_for_alert(alert, cheapest, params, alert_run_id=alert_run_id)
             sent_flag = True
         except Exception as e:
             print(f"[alerts] Failed to send email run_id={alert_run_id} alert_id={alert.id}: {e}")
