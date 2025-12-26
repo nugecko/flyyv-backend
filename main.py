@@ -2149,14 +2149,25 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
 
 
 def process_alert(alert: Alert, db: Session) -> None:
+    # =====================================================================
+    # SECTION: INIT AND START LOG
+    # =====================================================================
     now = datetime.utcnow()
+    alert_run_id = str(uuid4())
+
     print(
-        f"[alerts] process_alert START id={alert.id} "
+        f"[alerts] process_alert START "
+        f"run_id={alert_run_id} "
+        f"id={alert.id} "
         f"external_id={getattr(alert, 'user_external_id', None)} "
         f"email={getattr(alert, 'user_email', None)} "
-        f"type={getattr(alert, 'alert_type', None)} mode={getattr(alert, 'mode', None)}"
+        f"type={getattr(alert, 'alert_type', None)} "
+        f"mode={getattr(alert, 'mode', None)}"
     )
 
+    # =====================================================================
+    # SECTION: USER RESOLUTION AND GLOBAL ENABLEMENT
+    # =====================================================================
     user = _get_user_for_alert(db, alert)
 
     # Always stamp last_run_at when a run is attempted, even if we exit early
@@ -2166,7 +2177,7 @@ def process_alert(alert: Alert, db: Session) -> None:
     if not user:
         db.add(
             AlertRun(
-                id=str(uuid4()),
+                id=alert_run_id,
                 alert_id=alert.id,
                 run_at=now,
                 price_found=None,
@@ -2180,7 +2191,7 @@ def process_alert(alert: Alert, db: Session) -> None:
     if not should_send_alert(db, user):
         db.add(
             AlertRun(
-                id=str(uuid4()),
+                id=alert_run_id,
                 alert_id=alert.id,
                 run_at=now,
                 price_found=None,
@@ -2190,19 +2201,27 @@ def process_alert(alert: Alert, db: Session) -> None:
         )
         db.commit()
         return
-    
-    # Prevent duplicate processing within a short window
+
+    # =====================================================================
+    # SECTION: DUPLICATE GUARD (SHORT WINDOW)
+    # =====================================================================
     if getattr(alert, "last_checked_at", None) is not None:
         age_seconds = (now - alert.last_checked_at).total_seconds()
         if age_seconds < 300:
-            print(f"[alerts] skip recent_check alert_id={alert.id} age_seconds={int(age_seconds)}")
+            print(
+                f"[alerts] skip recent_check "
+                f"run_id={alert_run_id} alert_id={alert.id} age_seconds={int(age_seconds)}"
+            )
             return
-            
+
     # Stamp last_checked_at once, after passing the guard
     alert.last_checked_at = now
     alert.updated_at = now
     db.commit()
 
+    # =====================================================================
+    # SECTION: BUILD SEARCH PARAMS AND SCAN PARAMS
+    # =====================================================================
     params = build_search_params_for_alert(alert)
 
     # For under-price alerts, do not apply maxPrice during the scan itself.
@@ -2219,7 +2238,10 @@ def process_alert(alert: Alert, db: Session) -> None:
     else:
         scan_params = params
 
-        import json
+    # =====================================================================
+    # SECTION: CACHE READ OR DUFFEL SCAN
+    # =====================================================================
+    import json
     from types import SimpleNamespace
 
     cache_hit = False
@@ -2232,7 +2254,7 @@ def process_alert(alert: Alert, db: Session) -> None:
             options = [SimpleNamespace(**d) for d in cached_list]
             cache_hit = True
         except Exception as e:
-            print(f"[alerts] cache read failed alert_id={alert.id}: {e}")
+            print(f"[alerts] cache read failed run_id={alert_run_id} alert_id={alert.id}: {e}")
             options = None
             cache_hit = False
 
@@ -2257,18 +2279,24 @@ def process_alert(alert: Alert, db: Session) -> None:
             alert.updated_at = now
             db.commit()
         except Exception as e:
-            print(f"[alerts] cache write failed alert_id={alert.id}: {e}")
+            print(f"[alerts] cache write failed run_id={alert_run_id} alert_id={alert.id}: {e}")
 
     print(
-        f"[alerts] scan complete alert_id={alert.id} "
-        f"options_count={len(options)} cache_hit={cache_hit} "
-        f"scan_maxPrice={getattr(scan_params, 'maxPrice', None)}"
+        f"[alerts] scan complete "
+        f"run_id={alert_run_id} alert_id={alert.id} "
+        f"options_count={len(options) if options else 0} "
+        f"cache_hit={cache_hit} "
+        f"scan_maxPrice={getattr(scan_params, 'maxPrice', None)} "
+        f"plan_checks_per_day={getattr(user, 'plan_checks_per_day', None)}"
     )
 
+    # =====================================================================
+    # SECTION: NO RESULTS
+    # =====================================================================
     if not options:
         db.add(
             AlertRun(
-                id=str(uuid4()),
+                id=alert_run_id,
                 alert_id=alert.id,
                 run_at=now,
                 price_found=None,
@@ -2279,11 +2307,13 @@ def process_alert(alert: Alert, db: Session) -> None:
         db.commit()
         return
 
+    # =====================================================================
+    # SECTION: CHEAPEST AND STORED BEST
+    # =====================================================================
     options_sorted = sorted(options, key=lambda o: o.price)
     cheapest = options_sorted[0]
     current_price = int(cheapest.price)
 
-    # Stored best price: prefer alert.last_price (fast), fallback to historical best run
     stored_best_price = getattr(alert, "last_price", None)
     if stored_best_price is None:
         best_run = (
@@ -2293,16 +2323,14 @@ def process_alert(alert: Alert, db: Session) -> None:
             .order_by(AlertRun.price_found.asc())
             .first()
         )
-        stored_best_price = (
-            int(best_run.price_found)
-            if best_run and best_run.price_found is not None
-            else None
-        )
+        stored_best_price = int(best_run.price_found) if best_run and best_run.price_found is not None else None
 
+    # =====================================================================
+    # SECTION: DECIDE WHETHER TO SEND
+    # =====================================================================
     should_send = False
     send_reason = None
 
-    # Normalize alert type, then override to "under_price" if a threshold is set
     effective_type = getattr(alert, "alert_type", None) or "new_best"
     if effective_type == "price_change":
         effective_type = "new_best"
@@ -2338,23 +2366,117 @@ def process_alert(alert: Alert, db: Session) -> None:
         should_send = False
         send_reason = "unknown_alert_type"
 
+    # =====================================================================
+    # SECTION: SNAPSHOT INSERT (ONLY WHEN WE PLAN TO SEND)
+    # =====================================================================
+    if should_send:
+        try:
+            from sqlalchemy import text as sql_text
+
+            def _opt_to_dict_for_snapshot(o):
+                if hasattr(o, "model_dump"):
+                    return o.model_dump()
+                if hasattr(o, "dict"):
+                    return o.dict()
+                return dict(getattr(o, "__dict__", {}))
+
+            # Store a small, stable payload, top 5 is enough to render the email and page consistently
+            top_results = [_opt_to_dict_for_snapshot(o) for o in options_sorted[:5]]
+
+            # Params: best effort to persist inputs that explain the run
+            params_payload = {}
+            for k in [
+                "origin",
+                "destination",
+                "cabin",
+                "passengers",
+                "search_mode",
+                "earliestDeparture",
+                "latestDeparture",
+                "nights",
+                "minStayDays",
+                "maxStayDays",
+                "stopsFilter",
+                "maxPrice",
+                "currency",
+            ]:
+                try:
+                    v = getattr(params, k, None)
+                    if hasattr(v, "isoformat"):
+                        v = v.isoformat()
+                    params_payload[k] = v
+                except Exception:
+                    pass
+
+            currency = params_payload.get("currency") or "GBP"
+
+            db.execute(
+                sql_text(
+                    """
+                    insert into alert_run_snapshots
+                      (alert_run_id, alert_id, user_email, params, top_results, best_price_per_pax, currency, meta)
+                    values
+                      (:alert_run_id, :alert_id, :user_email, :params::jsonb, :top_results::jsonb, :best_price, :currency, :meta::jsonb)
+                    on conflict (alert_run_id) do nothing
+                    """
+                ),
+                {
+                    "alert_run_id": alert_run_id,
+                    "alert_id": str(alert.id),
+                    "user_email": getattr(alert, "user_email", None),
+                    "params": json.dumps(params_payload),
+                    "top_results": json.dumps(top_results),
+                    "best_price": int(current_price),
+                    "currency": str(currency),
+                    "meta": json.dumps(
+                        {
+                            "cache_hit": bool(cache_hit),
+                            "options_count": int(len(options_sorted)),
+                            "send_reason": str(send_reason),
+                            "created_at_utc": now.isoformat(),
+                        }
+                    ),
+                },
+            )
+            db.commit()
+
+            print(
+                f"[alerts] snapshot saved "
+                f"run_id={alert_run_id} alert_id={alert.id} "
+                f"best_price_per_pax={current_price} currency={currency}"
+            )
+        except Exception as e:
+            # If snapshot fails, we still send, but we log loudly.
+            print(f"[alerts] snapshot insert failed run_id={alert_run_id} alert_id={alert.id}: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    # =====================================================================
+    # SECTION: SEND EMAIL
+    # =====================================================================
     sent_flag = False
 
     if should_send:
         try:
             if getattr(alert, "mode", None) == "smart":
+                # NOTE: we will pass alert_run_id into the email builder in the next tiny edit.
                 send_smart_alert_email(alert, options_sorted, params)
             else:
                 send_alert_email_for_alert(alert, cheapest, params)
             sent_flag = True
         except Exception as e:
-            print(f"[alerts] Failed to send email for alert {alert.id}: {e}")
+            print(f"[alerts] Failed to send email run_id={alert_run_id} alert_id={alert.id}: {e}")
             sent_flag = False
             send_reason = "email_failed"
 
+    # =====================================================================
+    # SECTION: RECORD RUN, UPDATE ALERT STATE
+    # =====================================================================
     db.add(
         AlertRun(
-            id=str(uuid4()),
+            id=alert_run_id,
             alert_id=alert.id,
             run_at=now,
             price_found=current_price,
@@ -2376,7 +2498,6 @@ def process_alert(alert: Alert, db: Session) -> None:
         alert.last_notified_price = current_price
 
     db.commit()
-
 
 def run_all_alerts_cycle() -> None:
     if not master_alerts_enabled():
