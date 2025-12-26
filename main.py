@@ -1416,6 +1416,9 @@ def fetch_direct_only_offers(
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     print(f"[search] run_duffel_scan START origin={params.origin} dest={params.destination}")
 
+    # -----------------------------
+    # Caps and date pair generation
+    # -----------------------------
     max_pairs, max_offers_pair, max_offers_total = effective_caps(params)
     print(f"[search] caps max_pairs={max_pairs} max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}")
 
@@ -1426,6 +1429,7 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     if max_date_pairs and len(date_pairs) > max_date_pairs:
         print(f"[search] capping date_pairs from {len(date_pairs)} to {max_date_pairs} using MAX_DATE_PAIRS_PER_ALERT")
         date_pairs = date_pairs[:max_date_pairs]
+
     # Definitive truth for UI counters
     earliest = getattr(params, "earliestDeparture", None)
     latest = getattr(params, "latestDeparture", None)
@@ -1442,84 +1446,145 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
         f" preview12={pairs_preview}"
     )
 
-
     if not date_pairs:
         print("[search] no date pairs generated, returning empty list")
         return []
 
-    collected_offers: List[Tuple[dict, date, date]] = []
-    total_count = 0
+    # -----------------------------
+    # Mitigation knobs
+    # -----------------------------
+    alert_scan_max_seconds = get_config_int("ALERT_SCAN_MAX_SECONDS", 180)  # hard stop, per alert run
+    empty_pairs_stop_after = get_config_int("ALERT_EMPTY_PAIRS_STOP_AFTER", 12)  # consecutive empty pairs
+    early_exit_min_results = get_config_int("ALERT_EARLY_EXIT_MIN_RESULTS", 200)  # stop if we already have enough
+    early_exit_no_improve_pairs = get_config_int("ALERT_EARLY_EXIT_NO_IMPROVE_PAIRS", 10)  # pairs with no best improvement
+    pair_cache_ttl_seconds = get_config_int("ALERT_PAIR_CACHE_TTL_SECONDS", 3600)  # reuse pair results across runs
 
-    for dep, ret in date_pairs:
-        if total_count >= max_offers_total:
-            print(f"[search] total_count {total_count} reached max_offers_total {max_offers_total}, stopping")
-            break
+    # -----------------------------
+    # Pair ordering (try best first)
+    # -----------------------------
+    preferred_weekdays = {1: 0, 2: 1, 5: 2}  # Tue, Wed, Sat as "best first"; lower is better
+    def pair_sort_key(dep_ret: Tuple[date, date]) -> Tuple[int, str]:
+        dep, ret = dep_ret
+        wd_rank = preferred_weekdays.get(dep.weekday(), 9)
+        return (wd_rank, dep.isoformat())
 
-        print(f"[search] querying Duffel for pair dep={dep} ret={ret} current_total={total_count}")
+    date_pairs = sorted(date_pairs, key=pair_sort_key)
 
-        slices = [
-            {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
-            {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
-        ]
-        pax = [{"type": "adult"} for _ in range(params.passengers)]
+    # -----------------------------
+    # Simple in-process cache
+    # -----------------------------
+    # This cache lives in memory inside the running container, it speeds up repeated runs.
+    # If you later want cross-container persistence, we can move it to Postgres.
+    global _DUFFEL_PAIR_CACHE  # type: ignore[name-defined]
+    try:
+        _DUFFEL_PAIR_CACHE
+    except Exception:
+        _DUFFEL_PAIR_CACHE = {}  # key -> {"ts": float, "offers": List[dict]}
 
-        try:
-            offer_request = duffel_create_offer_request(slices, pax, params.cabin)
-            offer_request_id = offer_request.get("id")
-            if not offer_request_id:
-                print("[search] Duffel offer_request returned no id, skipping pair")
-                continue
+    def _cache_key(dep: date, ret: date) -> str:
+        cabin = getattr(params, "cabin", None)
+        return f"{params.origin}|{params.destination}|{dep.isoformat()}|{ret.isoformat()}|{cabin}|pax={params.passengers}"
 
-            per_pair_limit = min(max_offers_pair, max_offers_total - total_count)
-
-            # Duffel can return offers inline on offer_request creation.
-            # Prefer inline offers to avoid an extra API call and any account limitations on /offers.
-            offers_json = offer_request.get("offers") or []
-            if offers_json:
-                print(f"[search] Duffel offer_request returned {len(offers_json)} inline offers for dep={dep} ret={ret}")
-                offers_json = offers_json[:per_pair_limit]
-            else:
-                print(f"[search] listing offers for request_id={offer_request_id} per_pair_limit={per_pair_limit}")
-                offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
-        except HTTPException as e:
-            print(f"[search] Duffel HTTPException for dep={dep} ret={ret}: {e.detail}")
-            continue
-        except Exception as e:
-            print(f"[search] Unexpected Duffel error for dep={dep} ret={ret}: {e}")
-            continue
-
-        print(f"[search] Duffel returned {len(offers_json)} offers for dep={dep} ret={ret}")
-
-        for offer in offers_json:
-            collected_offers.append((offer, dep, ret))
-            total_count += 1
-            if total_count >= max_offers_total:
-                print(f"[search] reached max_offers_total={max_offers_total} while collecting offers, breaking inner loop")
-                break
-
-    print(f"[search] collected total {len(collected_offers)} offers across all pairs")
-    print("[search] starting per date pair mapping, filtering and balancing")
-
-    offers_by_pair: Dict[Tuple[date, date], List[dict]] = defaultdict(list)
-    for offer, dep, ret in collected_offers:
-        offers_by_pair[(dep, ret)].append(offer)
+    # -----------------------------
+    # Main scan loop with early exits
+    # -----------------------------
+    import time
+    start_ts = time.time()
 
     all_results: List[FlightOption] = []
     total_added = 0
     hit_global_cap = False
+    empty_streak = 0
 
-    for dep, ret in date_pairs:
-        pair_key = (dep, ret)
-        pair_offers = offers_by_pair.get(pair_key, [])
-        if not pair_offers:
+    best_price_seen: Optional[float] = None
+    pairs_since_best_improve = 0
+
+    for idx, (dep, ret) in enumerate(date_pairs, start=1):
+        elapsed = time.time() - start_ts
+        if alert_scan_max_seconds and elapsed >= alert_scan_max_seconds:
+            print(f"[search] timeout reached after {int(elapsed)}s, stopping scan early, pairs_done={idx - 1}")
+            break
+
+        if total_added >= max_offers_total:
+            print(f"[search] total_added {total_added} reached max_offers_total {max_offers_total}, stopping")
+            hit_global_cap = True
+            break
+
+        if empty_pairs_stop_after and empty_streak >= empty_pairs_stop_after:
+            print(f"[search] empty_streak {empty_streak} reached stop_after {empty_pairs_stop_after}, stopping scan early")
+            break
+
+        if early_exit_min_results and total_added >= early_exit_min_results and pairs_since_best_improve >= early_exit_no_improve_pairs:
+            print(
+                f"[search] early exit: total_added={total_added} >= {early_exit_min_results} and "
+                f"pairs_since_best_improve={pairs_since_best_improve} >= {early_exit_no_improve_pairs}"
+            )
+            break
+
+        print(f"[search] pair {idx}/{len(date_pairs)} dep={dep} ret={ret} current_total={total_added} empty_streak={empty_streak}")
+
+        # -----------------------------
+        # Fetch offers (cache first)
+        # -----------------------------
+        offers_json: List[dict] = []
+        ck = _cache_key(dep, ret)
+        cached = _DUFFEL_PAIR_CACHE.get(ck)
+        if cached and (time.time() - cached.get("ts", 0)) <= pair_cache_ttl_seconds:
+            offers_json = list(cached.get("offers") or [])
+            print(f"[search] cache_hit for dep={dep} ret={ret} offers={len(offers_json)}")
+        else:
+            slices = [
+                {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
+                {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
+            ]
+            pax = [{"type": "adult"} for _ in range(params.passengers)]
+
+            try:
+                offer_request = duffel_create_offer_request(slices, pax, params.cabin)
+                offer_request_id = offer_request.get("id")
+                if not offer_request_id:
+                    print("[search] Duffel offer_request returned no id, skipping pair")
+                    empty_streak += 1
+                    pairs_since_best_improve += 1
+                    continue
+
+                per_pair_limit = min(max_offers_pair, max_offers_total - total_added)
+
+                inline = offer_request.get("offers") or []
+                if inline:
+                    offers_json = inline[:per_pair_limit]
+                    print(f"[search] Duffel inline offers dep={dep} ret={ret} count={len(inline)} used={len(offers_json)}")
+                else:
+                    offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+                    print(f"[search] Duffel listed offers dep={dep} ret={ret} used={len(offers_json)} request_id={offer_request_id}")
+
+                _DUFFEL_PAIR_CACHE[ck] = {"ts": time.time(), "offers": offers_json}
+            except HTTPException as e:
+                print(f"[search] Duffel HTTPException dep={dep} ret={ret}: {e.detail}")
+                empty_streak += 1
+                pairs_since_best_improve += 1
+                continue
+            except Exception as e:
+                print(f"[search] Unexpected Duffel error dep={dep} ret={ret}: {e}")
+                empty_streak += 1
+                pairs_since_best_improve += 1
+                continue
+
+        if not offers_json:
             print(f"[search] no offers to map for dep={dep} ret={ret}")
+            empty_streak += 1
+            pairs_since_best_improve += 1
             continue
+
+        # -----------------------------
+        # Map, filter, balance, add
+        # -----------------------------
+        empty_streak = 0
 
         mapped_pair: List[FlightOption] = [
             map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-            for offer in pair_offers
+            for offer in offers_json
         ]
-
         print(f"[search] pair dep={dep} ret={ret}: mapped {len(mapped_pair)} offers")
 
         filtered_pair = apply_filters(mapped_pair, params)
@@ -1527,13 +1592,24 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 
         if not filtered_pair:
             print(f"[search] pair dep={dep} ret={ret}: no offers after filters")
+            pairs_since_best_improve += 1
             continue
+
+        filtered_pair.sort(key=lambda o: (getattr(o, "price", float("inf"))))
+        pair_best = float(getattr(filtered_pair[0], "price", float("inf")))
+        if best_price_seen is None or pair_best < best_price_seen:
+            best_price_seen = pair_best
+            pairs_since_best_improve = 0
+        else:
+            pairs_since_best_improve += 1
 
         airline_counts_pair = Counter(opt.airlineCode or opt.airline for opt in filtered_pair)
         print(f"[search] airline mix before balance for dep={dep} ret={ret}: {dict(airline_counts_pair)}")
 
         if len(filtered_pair) > max_offers_pair:
-            print(f"[search] pair dep={dep} ret={ret}: capping offers from {len(filtered_pair)} to {max_offers_pair} using max_offers_pair")
+            print(
+                f"[search] pair dep={dep} ret={ret}: capping offers from {len(filtered_pair)} to {max_offers_pair} using max_offers_pair"
+            )
             filtered_pair = filtered_pair[:max_offers_pair]
 
         balanced_pair = balance_airlines(filtered_pair, max_total=max_offers_pair)
@@ -1550,7 +1626,11 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
         if hit_global_cap:
             break
 
-    print(f"[search] run_duffel_scan DONE, returning {len(all_results)} offers from {len(date_pairs)} date pairs, hit_global_cap={hit_global_cap}")
+    elapsed_total = int(time.time() - start_ts)
+    print(
+        f"[search] run_duffel_scan DONE, returning {len(all_results)} offers "
+        f"from {len(date_pairs)} date pairs, hit_global_cap={hit_global_cap}, elapsed_seconds={elapsed_total}"
+    )
     return all_results
 
 # =====================================================================
