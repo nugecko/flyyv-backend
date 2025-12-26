@@ -2189,6 +2189,8 @@ def process_alert(alert: Alert, db: Session) -> None:
         db.commit()
         return
 
+        alert_run_id = str(uuid4())
+
     if not should_send_alert(db, user):
         db.add(
             AlertRun(
@@ -2224,8 +2226,6 @@ def process_alert(alert: Alert, db: Session) -> None:
     # SECTION: CREATE ALERT RUN ROW (FK ANCHOR)
     # Creates the alert_runs row up front so snapshots can FK to it safely.
     # =======================================
-
-    alert_run_id = str(uuid4())
 
     run_row = AlertRun(
         id=alert_run_id,
