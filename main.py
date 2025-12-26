@@ -2175,6 +2175,9 @@ def process_alert(alert: Alert, db: Session) -> None:
     alert.last_run_at = now
     alert.updated_at = now
 
+    # Create a run id up front so ALL early exits can write an AlertRun row safely
+    alert_run_id = str(uuid4())
+
     if not user:
         db.add(
             AlertRun(
@@ -2188,8 +2191,6 @@ def process_alert(alert: Alert, db: Session) -> None:
         )
         db.commit()
         return
-
-        alert_run_id = str(uuid4())
 
     if not should_send_alert(db, user):
         db.add(
