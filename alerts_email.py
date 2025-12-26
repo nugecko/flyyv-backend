@@ -40,6 +40,13 @@ def _safe_int(val, default: int = 1) -> int:
         return default
 
 
+def _safe_float(val, default: float = 0.0) -> float:
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+
 def _get_attr(obj, name: str, default=None):
     return getattr(obj, name, default)
 
@@ -135,6 +142,18 @@ def _compute_theoretical_combinations(alert) -> Optional[int]:
         return max(0, int(valid))
     except Exception:
         return None
+
+
+def _price_per_pax(total_price, passengers: int) -> float:
+    """
+    Canonical: email prices are always per passenger.
+    We defensively assume incoming 'price' may be total for all passengers.
+    """
+    pax = _safe_int(passengers, 1)
+    if pax <= 0:
+        pax = 1
+    total = _safe_float(total_price, 0.0)
+    return total / float(pax)
 
 # =====================================================================
 # SECTION END: LOW LEVEL UTILS
@@ -333,6 +352,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     One off alert email:
     - single date pair
     - single cheapest option
+    Prices must be per passenger.
     """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
@@ -348,7 +368,11 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     passengers = _derive_passengers(alert=alert, params=params)
     passenger_text = _passengers_label(passengers)
 
-    price_label = _fmt_money_gbp(getattr(cheapest, "price", 0))
+    # Canonical: per passenger
+    total_price = _get_attr(cheapest, "price", 0)
+    per_pax_price = _price_per_pax(total_price, passengers)
+    price_label = _fmt_money_gbp(per_pax_price)
+
     cabin_title = _cabin_display_label(cabin)
 
     dep_label = _fmt_date_label(getattr(cheapest, "departureDate", None))
@@ -359,6 +383,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
         getattr(cheapest, "departureDate", None),
         getattr(cheapest, "returnDate", None),
         passengers=passengers,
+        alert_run_id=alert_run_id,
     )
 
     airline_label = getattr(cheapest, "airline", None) or "Multiple airlines"
@@ -405,42 +430,18 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:680px;margin:0 auto;padding:24px;">
 
-          <!-- =====================================================
-          SECTION START: EMAIL CONTAINER CARD
-          ====================================================== -->
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
 
-            <!-- =====================================================
-            SECTION START: HEADER LABEL
-            ====================================================== -->
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">Flyyv Alert</div>
-            <!-- =====================================================
-            SECTION END: HEADER LABEL
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: MAIN TITLE
-            ====================================================== -->
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 10px 0;">
               Price match found
             </div>
-            <!-- =====================================================
-            SECTION END: MAIN TITLE
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: SUMMARY
-            ====================================================== -->
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 14px 0;">
               {origin} → {destination}, <strong>{cabin_title}</strong>, {passenger_text}
             </div>
-            <!-- =====================================================
-            SECTION END: SUMMARY
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: KEY BOX
-            ====================================================== -->
             <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;background:#fbfbfd;margin:0 0 18px 0;">
               <div style="font-size:22px;color:#111827;font-weight:900;line-height:1.1;margin:0 0 4px 0;">
                 {price_label}
@@ -452,38 +453,20 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
                 Cheapest option: <strong>{airline_label}</strong>{airline_code_txt}
               </div>
             </div>
-            <!-- =====================================================
-            SECTION END: KEY BOX
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: PRIMARY CTA
-            ====================================================== -->
             <div style="margin:0 0 18px 0;">
               <a href="{drill_url}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:800;font-size:15px;">
                 View this flight
               </a>
             </div>
-            <!-- =====================================================
-            SECTION END: PRIMARY CTA
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: FOOTNOTE
-            ====================================================== -->
             <div style="font-size:12px;color:#6b7280;line-height:1.4;">
               You are receiving this email because you created a Flyyv price alert.
               To stop these alerts, delete the alert in your Flyyv profile.
             </div>
-            <!-- =====================================================
-            SECTION END: FOOTNOTE
-            ====================================================== -->
 
           </div>
-          <!-- =====================================================
-          SECTION END: EMAIL CONTAINER CARD
-          ====================================================== -->
 
         </div>
       </body>
@@ -516,6 +499,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     - Top 5 cheapest date combinations
     - Per-row CTA drills into a single date pair
     - Full results CTA recreates original window
+    Prices must be per passenger.
     """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
@@ -557,17 +541,23 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
 
     for dep_iso, ret_iso in grouped.keys():
         flights = grouped[(dep_iso, ret_iso)]
-        prices = [o.price for o in flights if getattr(o, "price", None) is not None]
-        if not prices:
+        totals = [o.price for o in flights if getattr(o, "price", None) is not None]
+        if not totals:
             continue
 
         cheapest = min(flights, key=lambda o: o.price)
-        min_price = float(min(prices))
+        min_total_price = float(min(totals))
+
+        # Canonical: per passenger
+        cheapest_per_pax = _price_per_pax(getattr(cheapest, "price", 0), passengers)
+        min_per_pax = _price_per_pax(min_total_price, passengers)
 
         flights_under: List = []
         if threshold is not None:
             try:
-                flights_under = [o for o in flights if o.price <= float(threshold)]
+                # Interpret threshold as per passenger
+                th = float(threshold)
+                flights_under = [o for o in flights if _price_per_pax(o.price, passengers) <= th]
                 if flights_under:
                     any_under = True
             except Exception:
@@ -580,10 +570,10 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                 "departureDate": dep_iso,
                 "returnDate": ret_iso,
                 "totalFlights": len(flights),
-                "cheapestPrice": float(cheapest.price),
+                "cheapestPrice": float(cheapest_per_pax),  # per passenger
                 "cheapestAirline": getattr(cheapest, "airline", None),
                 "flyyvLink": flyyv_link,
-                "minPrice": min_price,
+                "minPrice": float(min_per_pax),  # per passenger
                 "flightsUnderThresholdCount": len(flights_under),
             }
         )
@@ -615,7 +605,10 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     if best_price_overall is not None:
         subject = f"FlyyvFlex Alert: {origin} → {destination} from £{best_price_overall} per passenger"
     elif threshold is not None and any_under:
-        subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(threshold)} per passenger"
+        try:
+            subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(float(threshold))} per passenger"
+        except Exception:
+            subject = f"FlyyvFlex Alert: {origin} → {destination} fares under your price range"
     else:
         subject = f"FlyyvFlex Alert: {origin} → {destination} update"
 
@@ -717,9 +710,6 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                      style="border:1px solid #e6e8ee;border-radius:12px;background:#ffffff;border-collapse:separate;">
                 <tr>
 
-                  <!-- ============================================
-                  SECTION START: LEFT CELL
-                  ============================================ -->
                   <td style="padding:14px;vertical-align:top;">
                     <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:4px;">
                       {origin} → {destination}
@@ -733,13 +723,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                       Cheapest option: <strong>{airline_label}</strong>{within_html}
                     </div>
                   </td>
-                  <!-- ============================================
-                  SECTION END: LEFT CELL
-                  ============================================ -->
 
-                  <!-- ============================================
-                  SECTION START: RIGHT CELL
-                  ============================================ -->
                   <td style="padding:14px;vertical-align:top;width:170px;">
                     <div style="font-size:18px;color:#111827;font-weight:900;line-height:1.1;text-align:right;">
                       {price_label}
@@ -755,9 +739,6 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                       </a>
                     </div>
                   </td>
-                  <!-- ============================================
-                  SECTION END: RIGHT CELL
-                  ============================================ -->
 
                 </tr>
               </table>
@@ -800,54 +781,24 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:680px;margin:0 auto;padding:24px;">
 
-          <!-- =====================================================
-          SECTION START: EMAIL CONTAINER CARD
-          ====================================================== -->
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
 
-            <!-- =====================================================
-            SECTION START: HEADER LABEL
-            ====================================================== -->
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">FlyyvFlex Smart Search Alert</div>
-            <!-- =====================================================
-            SECTION END: HEADER LABEL
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: MAIN TITLE
-            ====================================================== -->
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:900;margin:0 0 10px 0;">
               Top {cabin_title} deals for {passenger_text} going from {origin} → {destination}
             </div>
-            <!-- =====================================================
-            SECTION END: MAIN TITLE
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: WINDOW SUMMARY
-            ====================================================== -->
             <div style="font-size:15px;line-height:1.6;color:#111827;margin:0 0 14px 0;">
               Based on a scan of your <strong>{start_label} to {end_label}</strong> window
               {f" for <strong>{nights_text}-night</strong> trips" if nights_text else ""}.
             </div>
-            <!-- =====================================================
-            SECTION END: WINDOW SUMMARY
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: META DETAILS
-            ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 12px 0;">
               Passengers: <strong>{passenger_text}</strong><br>
               {_price_basis_line()}
             </div>
-            <!-- =====================================================
-            SECTION END: META DETAILS
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: CHIPS ROW
-            ====================================================== -->
             <div style="margin:0 0 16px 0;">
 
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #d1fae5;background:#ecfdf5;font-size:13px;font-weight:800;margin-right:8px;margin-bottom:8px;">
@@ -861,76 +812,34 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
               {combos_chip}
               {best_chip}
             </div>
-            <!-- =====================================================
-            SECTION END: CHIPS ROW
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: DIVIDER
-            ====================================================== -->
             <div style="border-top:1px solid #eef0f5;margin:14px 0;"></div>
-            <!-- =====================================================
-            SECTION END: DIVIDER
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: TOP 5 HEADER
-            ====================================================== -->
             <div style="font-size:18px;color:#111827;font-weight:900;margin:0 0 12px 0;">
               Top 5 cheapest date combinations
             </div>
-            <!-- =====================================================
-            SECTION END: TOP 5 HEADER
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: TOP 5 TABLE
-            ====================================================== -->
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
               {rows_html if rows_html else '<tr><td style="color:#6b7280;font-size:14px;">No flights found in this scan.</td></tr>'}
             </table>
-            <!-- =====================================================
-            SECTION END: TOP 5 TABLE
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: PRIMARY CTA
-            ====================================================== -->
             <div style="margin:18px 0 0 0;">
               <a href="{open_full_results_url}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:900;font-size:15px;">
                 Open full results
               </a>
             </div>
-            <!-- =====================================================
-            SECTION END: PRIMARY CTA
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: FOOTNOTE
-            ====================================================== -->
             <div style="font-size:12px;color:#6b7280;line-height:1.4;margin-top:14px;">
               You are receiving this email because you created a FlyyvFlex Smart Search Alert.
               To stop these alerts, delete the alert in your Flyyv profile.
             </div>
-            <!-- =====================================================
-            SECTION END: FOOTNOTE
-            ====================================================== -->
 
           </div>
-          <!-- =====================================================
-          SECTION END: EMAIL CONTAINER CARD
-          ====================================================== -->
 
-          <!-- =====================================================
-          SECTION START: OUTER FOOTER
-          ====================================================== -->
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
             Flyyv, <a href="{open_full_results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
           </div>
-          <!-- =====================================================
-          SECTION END: OUTER FOOTER
-          ====================================================== -->
 
         </div>
       </body>
@@ -1036,53 +945,23 @@ def send_alert_confirmation_email(alert) -> None:
       <body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
         <div style="max-width:680px;margin:0 auto;padding:24px;">
 
-          <!-- =====================================================
-          SECTION START: EMAIL CONTAINER CARD
-          ====================================================== -->
           <div style="background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:26px;">
 
-            <!-- =====================================================
-            SECTION START: HEADER LABEL
-            ====================================================== -->
             <div style="font-size:14px;color:#6b7280;margin-bottom:10px;">{email_type_label}</div>
-            <!-- =====================================================
-            SECTION END: HEADER LABEL
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: MAIN TITLE
-            ====================================================== -->
             <div style="font-size:28px;line-height:1.2;color:#111827;font-weight:800;margin:0 0 12px 0;">
               Your alert is <span style="color:#059669;font-weight:900;">active</span>
             </div>
-            <!-- =====================================================
-            SECTION END: MAIN TITLE
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: SUMMARY
-            ====================================================== -->
             <div style="font-size:16px;line-height:1.5;color:#111827;margin:0 0 12px 0;">
               We are watching <strong>{origin} → {destination}</strong> and will email you when prices match your alert conditions.
             </div>
-            <!-- =====================================================
-            SECTION END: SUMMARY
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: META DETAILS
-            ====================================================== -->
             <div style="font-size:13px;color:#6b7280;margin:0 0 16px 0;">
               Passengers: <strong>{_passengers_label(passengers)}</strong><br>
               {_price_basis_line()}
             </div>
-            <!-- =====================================================
-            SECTION END: META DETAILS
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: PILLS
-            ====================================================== -->
             <div style="margin:0 0 18px 0;">
 
               <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-right:8px;margin-bottom:8px;">
@@ -1116,9 +995,6 @@ def send_alert_confirmation_email(alert) -> None:
               ''' if theoretical_combinations else ''}
 
             </div>
-            <!-- =====================================================
-            SECTION END: PILLS
-            ====================================================== -->
 
             {f'''
             <div style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">
@@ -1126,9 +1002,6 @@ def send_alert_confirmation_email(alert) -> None:
             </div>
             ''' if alert_id else ''}
 
-            <!-- =====================================================
-            SECTION START: WHAT WE WILL DO
-            ====================================================== -->
             <div style="border:1px solid #e6e8ee;border-radius:14px;padding:16px;margin:0 0 18px 0;background:#fbfbfd;">
               <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">What we will do</div>
               <ul style="margin:0;padding-left:18px;color:#111827;font-size:15px;line-height:1.6;">
@@ -1137,37 +1010,19 @@ def send_alert_confirmation_email(alert) -> None:
                 <li>Let you jump straight back into your results anytime</li>
               </ul>
             </div>
-            <!-- =====================================================
-            SECTION END: WHAT WE WILL DO
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: PRIMARY CTA
-            ====================================================== -->
             <div style="margin:0 0 18px 0;">
               <a href="{results_url}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:800;font-size:15px;">
                 View results
               </a>
             </div>
-            <!-- =====================================================
-            SECTION END: PRIMARY CTA
-            ====================================================== -->
 
-            <!-- =====================================================
-            SECTION START: FOOTNOTE
-            ====================================================== -->
             <div style="font-size:12px;color:#6b7280;line-height:1.4;">
               You are receiving this email because you created a {email_type_label}.
             </div>
-            <!-- =====================================================
-            SECTION END: FOOTNOTE
-            ====================================================== -->
 
           </div>
-          <!-- =====================================================
-          SECTION END: EMAIL CONTAINER CARD
-          ====================================================== -->
 
           <div style="text-align:center;font-size:11px;color:#9ca3af;padding:14px 0;">
             Flyyv, <a href="{results_url}" style="color:#6b7280;text-decoration:underline;">Open your results</a>
