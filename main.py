@@ -1,4 +1,4 @@
-33# =====================================================================
+# =====================================================================
 # SECTION START: IMPORTS
 # =====================================================================
 
@@ -2416,7 +2416,9 @@ def process_alert(alert: Alert, db: Session) -> None:
                     insert into alert_run_snapshots
                         (alert_run_id, alert_id, user_email, params, top_results, best_price_per_pax, currency, meta)
                     values
-                        (:alert_run_id, :alert_id, :user_email, :params::jsonb, :top_results::jsonb, :best_price, :currency, :meta::jsonb)
+                        (:alert_run_id, :alert_id, :user_email,
+                         CAST(:params AS jsonb), CAST(:top_results AS jsonb),
+                         :best_price, :currency, CAST(:meta AS jsonb))
                     on conflict (alert_run_id) do nothing
                     """
                 ),
