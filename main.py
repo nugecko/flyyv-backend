@@ -8,6 +8,8 @@ from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
+from uuid import UUID
+from sqlalchemy import text
 from collections import defaultdict, Counter
 import smtplib
 from email.message import EmailMessage
@@ -2905,6 +2907,67 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
 # SECTION END: SEARCH STATUS AND RESULTS ROUTES
 # =====================================================================
 
+# =====================================================================
+# SECTION START: ALERT RUN SNAPSHOT (READ ONLY)
+# =====================================================================
+
+@app.get("/alert-run-snapshot/{alert_run_id}")
+def get_alert_run_snapshot(alert_run_id: str):
+    # Validate UUID early
+    try:
+        run_uuid = str(UUID(alert_run_id))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid alert_run_id, must be a UUID")
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                        ar.id            AS alert_run_id,
+                        ar.alert_id      AS alert_id,
+                        ar.created_at    AS created_at,
+                        ars.best_price_per_pax AS best_price_per_pax,
+                        ars.currency     AS currency,
+                        ars.params       AS params,
+                        ars.top_results  AS top_results,
+                        ars.meta         AS meta
+                    FROM alert_runs ar
+                    JOIN alert_run_snapshots ars
+                      ON ars.alert_run_id = ar.id
+                    WHERE ar.id = :rid
+                    ORDER BY ars.created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"rid": run_uuid},
+            )
+            .mappings()
+            .first()
+        )
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Snapshot not found for this alertRunId")
+
+        # Ensure plain JSON serialisable dict
+        return {
+            "alert_run_id": str(row["alert_run_id"]),
+            "alert_id": row["alert_id"],
+            "created_at": row["created_at"],
+            "best_price_per_pax": row["best_price_per_pax"],
+            "currency": row["currency"],
+            "params": row["params"],
+            "top_results": row["top_results"],
+            "meta": row["meta"],
+        }
+    finally:
+        db.close()
+
+# =====================================================================
+# SECTION END: ALERT RUN SNAPSHOT (READ ONLY)
+# =====================================================================
 
 # =====================================================================
 # SECTION START: ADMIN CREDITS ENDPOINT
