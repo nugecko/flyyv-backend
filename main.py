@@ -2912,38 +2912,57 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
 # =====================================================================
 
 @app.get("/alert-run-snapshot/{alert_run_id}")
-def get_alert_run_snapshot(alert_run_id: str):
+def get_alert_run_snapshot(
+    alert_run_id: str,
+    x_user_id: str = Header(None, alias="X-User-Id"),
+    x_admin_token: str = Header(None, alias="X-Admin-Token"),
+):
     # Validate UUID early
     try:
         run_uuid = str(UUID(alert_run_id))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid alert_run_id, must be a UUID")
 
+    # Allow admin override, otherwise require user id and enforce ownership
+    received = (x_admin_token or "").strip()
+    expected = (ADMIN_API_TOKEN or "").strip()
+    if received.lower().startswith("bearer "):
+        received = received[7:].strip()
+    is_admin = (expected != "") and (received == expected)
+
+    if not is_admin and not x_user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id")
+
     db = SessionLocal()
     try:
+        sql = """
+            SELECT
+                ar.id                   AS alert_run_id,
+                ar.alert_id             AS alert_id,
+                ar.created_at           AS created_at,
+                ars.best_price_per_pax  AS best_price_per_pax,
+                ars.currency            AS currency,
+                ars.params              AS params,
+                ars.top_results         AS top_results,
+                ars.meta                AS meta
+            FROM alert_runs ar
+            JOIN alerts a
+              ON a.id = ar.alert_id
+            JOIN alert_run_snapshots ars
+              ON ars.alert_run_id = ar.id
+            WHERE ar.id = :rid
+        """
+
+        bind = {"rid": run_uuid}
+
+        if not is_admin:
+            sql += " AND a.user_external_id = :uid"
+            bind["uid"] = x_user_id
+
+        sql += " ORDER BY ars.created_at DESC LIMIT 1"
+
         row = (
-            db.execute(
-                text(
-                    """
-                    SELECT
-                        ar.id            AS alert_run_id,
-                        ar.alert_id      AS alert_id,
-                        ar.created_at    AS created_at,
-                        ars.best_price_per_pax AS best_price_per_pax,
-                        ars.currency     AS currency,
-                        ars.params       AS params,
-                        ars.top_results  AS top_results,
-                        ars.meta         AS meta
-                    FROM alert_runs ar
-                    JOIN alert_run_snapshots ars
-                      ON ars.alert_run_id = ar.id
-                    WHERE ar.id = :rid
-                    ORDER BY ars.created_at DESC
-                    LIMIT 1
-                    """
-                ),
-                {"rid": run_uuid},
-            )
+            db.execute(text(sql), bind)
             .mappings()
             .first()
         )
@@ -2951,16 +2970,55 @@ def get_alert_run_snapshot(alert_run_id: str):
         if not row:
             raise HTTPException(status_code=404, detail="Snapshot not found for this alertRunId")
 
-        # Ensure plain JSON serialisable dict
+        params = row["params"] or {}
+        meta = row["meta"] or {}
+        top_results = row["top_results"] or []
+
+        # Passengers for per-pax normalization (defensive for older snapshots)
+        passengers = 1
+        try:
+            passengers = int(params.get("passengers") or 1)
+        except Exception:
+            passengers = 1
+        if passengers <= 0:
+            passengers = 1
+
+        def _norm_item_price(item: dict) -> dict:
+            if not isinstance(item, dict):
+                return item
+
+            # If already per-pax, do nothing
+            if "price_per_pax" in item and item["price_per_pax"] is not None:
+                return item
+
+            # Prefer explicit total keys
+            for total_key in ("total_price", "totalPrice", "price_total", "priceTotal"):
+                if total_key in item and item[total_key] is not None:
+                    try:
+                        total = float(item[total_key])
+                        item["price_per_pax"] = round(total / passengers, 2)
+                        return item
+                    except Exception:
+                        return item
+
+            return item
+
+        if isinstance(top_results, list):
+            top_results = [_norm_item_price(r) for r in top_results]
+
+        meta = dict(meta)
+        meta["snapshot_mode"] = True
+        meta["passengers"] = passengers
+
         return {
             "alert_run_id": str(row["alert_run_id"]),
             "alert_id": row["alert_id"],
             "created_at": row["created_at"],
             "best_price_per_pax": row["best_price_per_pax"],
             "currency": row["currency"],
-            "params": row["params"],
-            "top_results": row["top_results"],
-            "meta": row["meta"],
+            "params": params,
+            "top_results": top_results,
+            "meta": meta,
         }
     finally:
         db.close()
