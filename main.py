@@ -2219,6 +2219,24 @@ def process_alert(alert: Alert, db: Session) -> None:
     alert.updated_at = now
     db.commit()
 
+    # =======================================
+    # SECTION: CREATE ALERT RUN ROW (FK ANCHOR)
+    # Creates the alert_runs row up front so snapshots can FK to it safely.
+    # =======================================
+
+    alert_run_id = str(uuid4())
+
+    run_row = AlertRun(
+        id=alert_run_id,
+        alert_id=str(alert.id),
+        run_at=now,
+        price_found=None,
+        sent=False,
+        reason="started",
+    )
+    db.add(run_row)
+    db.commit()
+
     # =====================================================================
     # SECTION: BUILD SEARCH PARAMS AND SCAN PARAMS
     # =====================================================================
@@ -2476,16 +2494,25 @@ def process_alert(alert: Alert, db: Session) -> None:
     # =====================================================================
     # SECTION: RECORD RUN, UPDATE ALERT STATE
     # =====================================================================
-    db.add(
-        AlertRun(
-            id=alert_run_id,
-            alert_id=alert.id,
-            run_at=now,
-            price_found=current_price,
-            sent=sent_flag,
-            reason=send_reason,
+    # =======================================
+    # SECTION: FINALISE ALERT RUN ROW
+    # Updates the run row we created at the start of processing.
+    # =======================================
+
+    try:
+        run_row.price_found = current_price
+        run_row.sent = bool(sent_flag)
+        run_row.reason = str(send_reason)
+        db.add(run_row)
+    except Exception:
+        # fallback update if the ORM instance is unavailable for any reason
+        db.query(AlertRun).filter(AlertRun.id == alert_run_id).update(
+            {
+                "price_found": current_price,
+                "sent": bool(sent_flag),
+                "reason": str(send_reason),
+            }
         )
-    )
 
     # Track best price on the alert record
     try:
