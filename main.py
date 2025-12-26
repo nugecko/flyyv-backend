@@ -2392,15 +2392,61 @@ def process_alert(alert: Alert, db: Session) -> None:
         try:
             from sqlalchemy import text as sql_text
 
-            def _opt_to_dict_for_snapshot(o):
-                if hasattr(o, "model_dump"):
-                    return o.model_dump()
-                if hasattr(o, "dict"):
-                    return o.dict()
-                return dict(getattr(o, "__dict__", {}))
+            def _opt_to_dict_for_snapshot(opt):
+                if opt is None:
+                    return {}
+                if hasattr(opt, "model_dump"):
+                    return opt.model_dump()
+                if hasattr(opt, "dict"):
+                    return opt.dict()
+                data = getattr(opt, "__dict__", None)
+                return dict(data) if isinstance(data, dict) else {}
+
+            def _to_float(val):
+                if val is None:
+                    return None
+                if isinstance(val, (int, float)):
+                    return float(val)
+                try:
+                    return float(str(val).strip())
+                except Exception:
+                    return None
+
+            def _pick_first(d, keys):
+                for k in keys:
+                    if k in d and d.get(k) is not None:
+                        return d.get(k)
+                return None
 
             # Store a small, stable payload, top 5 is enough to render the email and page consistently
-            top_results = [_opt_to_dict_for_snapshot(o) for o in options_sorted[:5]]
+            pax = max(1, int(getattr(params, "passengers", 1) or 1))
+            raw_top_results = [_opt_to_dict_for_snapshot(o) for o in (options_sorted or [])[:5]]
+
+            top_results = []
+            for item in raw_top_results:
+                if not isinstance(item, dict):
+                    top_results.append(item)
+                    continue
+
+                # Prefer explicit fields if present, otherwise derive deterministically
+                price_per_pax = _to_float(
+                    _pick_first(item, ["price_per_pax", "pricePerPax", "per_pax_price", "price"])
+                )
+                total_price = _to_float(
+                    _pick_first(item, ["total_price", "totalPrice", "total"])
+                )
+
+                if price_per_pax is None and total_price is not None:
+                    price_per_pax = round(total_price / pax, 2)
+
+                if total_price is None and price_per_pax is not None:
+                    total_price = round(price_per_pax * pax, 2)
+
+                item["passengers"] = pax
+                item["price_per_pax"] = price_per_pax
+                item["total_price"] = total_price
+
+                top_results.append(item)
 
             # Params: best effort to persist inputs that explain the run
             params_payload = {}
@@ -2429,6 +2475,9 @@ def process_alert(alert: Alert, db: Session) -> None:
 
             currency = params_payload.get("currency") or "GBP"
 
+            best_price_val = _to_float(current_price)
+            best_price_int = int(round(best_price_val)) if best_price_val is not None else None
+
             db.execute(
                 sql_text(
                     """
@@ -2447,12 +2496,13 @@ def process_alert(alert: Alert, db: Session) -> None:
                     "user_email": getattr(alert, "user_email", None),
                     "params": json.dumps(params_payload),
                     "top_results": json.dumps(top_results),
-                    "best_price": int(current_price),
+                    "best_price": best_price_int,
                     "currency": str(currency),
                     "meta": json.dumps(
                         {
                             "cache_hit": bool(cache_hit),
-                            "options_count": int(len(options_sorted)),
+                            "options_count": int(len(options_sorted or [])),
+                            "top_results_count": int(len(top_results)),
                             "send_reason": str(send_reason),
                             "created_at_utc": now.isoformat(),
                         }
@@ -2464,7 +2514,7 @@ def process_alert(alert: Alert, db: Session) -> None:
             print(
                 f"[alerts] snapshot saved "
                 f"run_id={alert_run_id} alert_id={alert.id} "
-                f"best_price_per_pax={current_price} currency={currency}"
+                f"best_price_per_pax={best_price_int} currency={currency}"
             )
         except Exception as e:
             # If snapshot fails, we still send, but we log loudly.
@@ -2477,6 +2527,7 @@ def process_alert(alert: Alert, db: Session) -> None:
     # =====================================================================
     # SECTION: SEND EMAIL
     # =====================================================================
+    
     sent_flag = False
 
     if should_send:
