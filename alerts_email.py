@@ -342,7 +342,6 @@ def _fmt_date_label(iso_or_dt) -> str:
 # SECTION END: DISPLAY HELPERS
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: ONE OFF ALERT EMAIL
 # =====================================================================
@@ -352,7 +351,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     One off alert email:
     - single date pair
     - single cheapest option
-    Prices must be per passenger.
+    Prices must be per person.
     """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
@@ -368,7 +367,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     passengers = _derive_passengers(alert=alert, params=params)
     passenger_text = _passengers_label(passengers)
 
-    # Canonical: per passenger
+    # Canonical: per person
     total_price = _get_attr(cheapest, "price", 0)
     per_pax_price = _price_per_pax(total_price, passengers)
     price_label = _fmt_money_gbp(per_pax_price)
@@ -390,7 +389,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     airline_code = getattr(cheapest, "airlineCode", None) or ""
     airline_code_txt = f" ({airline_code})" if airline_code else ""
 
-    subject = f"Flyyv Alert: {origin} → {destination} from {price_label} per passenger"
+    subject = f"Flyyv Alert: {origin} → {destination} from {price_label} per person"
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -408,7 +407,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
     lines.append(_price_basis_line())
     lines.append(f"Dates: {dep_label} to {ret_label}")
     lines.append("")
-    lines.append(f"Best price found: {price_label} per passenger with {airline_label}{airline_code_txt}")
+    lines.append(f"Best price found: {price_label} per person with {airline_label}{airline_code_txt}")
     lines.append("")
     lines.append("View this flight:")
     lines.append(drill_url)
@@ -447,7 +446,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
                 {price_label}
               </div>
               <div style="font-size:13px;color:#6b7280;margin:0 0 10px 0;">
-                per passenger, {dep_label} to {ret_label}
+                per person, {dep_label} to {ret_label}
               </div>
               <div style="font-size:14px;color:#111827;margin:0;">
                 Cheapest option: <strong>{airline_label}</strong>{airline_code_txt}
@@ -499,7 +498,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     - Top 5 cheapest date combinations
     - Per-row CTA drills into a single date pair
     - Full results CTA recreates original window
-    Prices must be per passenger.
+    Prices must be per person.
     """
     if not _smtp_ready():
         raise HTTPException(status_code=500, detail="SMTP settings are not fully configured on the server")
@@ -548,14 +547,14 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
         cheapest = min(flights, key=lambda o: o.price)
         min_total_price = float(min(totals))
 
-        # Canonical: per passenger
+        # Canonical: per person
         cheapest_per_pax = _price_per_pax(getattr(cheapest, "price", 0), passengers)
         min_per_pax = _price_per_pax(min_total_price, passengers)
 
         flights_under: List = []
         if threshold is not None:
             try:
-                # Interpret threshold as per passenger
+                # Interpret threshold as per person
                 th = float(threshold)
                 flights_under = [o for o in flights if _price_per_pax(o.price, passengers) <= th]
                 if flights_under:
@@ -570,10 +569,10 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                 "departureDate": dep_iso,
                 "returnDate": ret_iso,
                 "totalFlights": len(flights),
-                "cheapestPrice": float(cheapest_per_pax),  # per passenger
+                "cheapestPrice": float(cheapest_per_pax),  # per person
                 "cheapestAirline": getattr(cheapest, "airline", None),
                 "flyyvLink": flyyv_link,
-                "minPrice": float(min_per_pax),  # per passenger
+                "minPrice": float(min_per_pax),  # per person
                 "flightsUnderThresholdCount": len(flights_under),
             }
         )
@@ -603,10 +602,10 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     # ================================================================
 
     if best_price_overall is not None:
-        subject = f"FlyyvFlex Alert: {origin} → {destination} from £{best_price_overall} per passenger"
+        subject = f"FlyyvFlex Alert: {origin} → {destination} from £{best_price_overall} per person"
     elif threshold is not None and any_under:
         try:
-            subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(float(threshold))} per passenger"
+            subject = f"FlyyvFlex Alert: {origin} → {destination} fares under £{int(float(threshold))} per person"
         except Exception:
             subject = f"FlyyvFlex Alert: {origin} → {destination} fares under your price range"
     else:
@@ -641,7 +640,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     lines.append(f"Date combinations analysed: {analysed_combinations}")
 
     if best_price_overall is not None:
-        lines.append(f"Best price found: £{best_price_overall} per passenger")
+        lines.append(f"Best price found: £{best_price_overall} per person")
 
     lines.append("")
     lines.append("Top 5 cheapest date combinations:")
@@ -663,7 +662,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
             except Exception:
                 within_txt = ""
 
-            lines.append(f"{price_label} per passenger | {dep_label} to {ret_label} | {airline_label}{within_txt}")
+            lines.append(f"{price_label} per person | {dep_label} to {ret_label} | {airline_label}{within_txt}")
             lines.append(f"View flight: {p.get('flyyvLink')}")
             lines.append("")
 
@@ -730,7 +729,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                     </div>
 
                     <div style="font-size:12px;color:#6b7280;margin-top:2px;text-align:right;">
-                      per passenger
+                      per person
                     </div>
 
                     <div style="margin-top:10px;text-align:right;">
@@ -758,7 +757,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     if best_price_overall is not None:
         best_chip = f"""
         <span style="display:inline-block;padding:8px 12px;border-radius:999px;border:1px solid #e6e8ee;background:#f9fafb;font-size:13px;margin-bottom:8px;">
-          Best {_fmt_money_gbp(best_price_overall)} per passenger
+          Best {_fmt_money_gbp(best_price_overall)} per person
         </span>
         """
 
@@ -1050,7 +1049,6 @@ def send_alert_confirmation_email(alert) -> None:
 # =====================================================================
 # SECTION END: ALERT CONFIRMATION EMAIL
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: EARLY ACCESS WELCOME EMAIL
