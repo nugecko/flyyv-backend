@@ -2153,11 +2153,10 @@ def process_alert(alert: Alert, db: Session) -> None:
     # SECTION: INIT AND START LOG
     # =====================================================================
     now = datetime.utcnow()
-    alert_run_id = str(uuid4())
 
     print(
         f"[alerts] process_alert START "
-        f"run_id={alert_run_id} "
+        f"run_id=pending "
         f"id={alert.id} "
         f"external_id={getattr(alert, 'user_external_id', None)} "
         f"email={getattr(alert, 'user_email', None)} "
