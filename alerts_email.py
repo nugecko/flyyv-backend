@@ -328,7 +328,7 @@ def _fmt_date_label(iso_or_dt) -> str:
 # SECTION START: ONE OFF ALERT EMAIL
 # =====================================================================
 
-def send_alert_email_for_alert(alert, cheapest, params) -> None:
+def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[str] = None) -> None:
     """
     One off alert email:
     - single date pair
@@ -510,7 +510,7 @@ def send_alert_email_for_alert(alert, cheapest, params) -> None:
 # SECTION START: SMART ALERT SUMMARY EMAIL (FLYYVFLEX)
 # =====================================================================
 
-def send_smart_alert_email(alert, options: List, params) -> None:
+def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[str] = None) -> None:
     """
     FlyyvFlex results email:
     - Top 5 cheapest date combinations
@@ -573,7 +573,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
             except Exception:
                 flights_under = []
 
-        flyyv_link = build_flyyv_link(alert, dep_iso, ret_iso, passengers=passengers)
+        flyyv_link = build_flyyv_link(alert, dep_iso, ret_iso, passengers=passengers, alert_run_id=alert_run_id)
 
         pairs_summary.append(
             {
@@ -626,7 +626,7 @@ def send_smart_alert_email(alert, options: List, params) -> None:
     top_pairs = [p for p in pairs_summary if p.get("cheapestPrice") is not None]
     top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
 
-    open_full_results_url = build_alert_search_link(alert)
+    open_full_results_url = build_alert_search_link(alert, alert_run_id=alert_run_id)
 
     msg = EmailMessage()
     msg["Subject"] = subject
