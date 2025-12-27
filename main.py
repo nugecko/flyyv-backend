@@ -3003,6 +3003,11 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not DUFFEL_ACCESS_TOKEN:
         return {"status": "error", "source": "duffel_not_configured", "options": []}
 
+    try:
+        print(f"[guardrail] request_keys={sorted(list(params.model_dump().keys()))}")
+    except Exception:
+        pass
+
     print(
         f"[search_business] search_mode={getattr(params,'search_mode',None)} "
         f"earliestDeparture={getattr(params,'earliestDeparture',None)} "
