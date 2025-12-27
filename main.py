@@ -2846,7 +2846,12 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
+    
+@app.get("/debug-duffel-get")
+def debug_duffel_get():
+    # simple lightweight Duffel call that should always respond fast
+    res = duffel_get("/air/airlines", params={"limit": 1})
+    return {"ok": True, "type": str(type(res)), "sample": res}
 
 @app.get("/routes")
 def list_routes():
