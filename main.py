@@ -740,6 +740,15 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception:
         pass
 
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=data)
+
+    # Most Duffel responses are {"data": ...}
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    return data
+
+
 def duffel_get(path: str, params: Optional[dict] = None) -> dict:
     """
     Minimal Duffel GET helper.
