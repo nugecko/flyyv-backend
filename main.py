@@ -809,8 +809,13 @@ def duffel_list_offers(offer_request_id: str, limit: int = 100) -> List[dict]:
     Returns a list of offers for a given offer_request_id.
     """
     res = duffel_get("/air/offers", params={"offer_request_id": offer_request_id, "limit": int(limit)})
-    data = res.get("data") if isinstance(res, dict) else None
-    return data or []
+
+    # duffel_get() returns the "data" payload already
+    if isinstance(res, list):
+        return res
+    if isinstance(res, dict) and "data" in res and isinstance(res["data"], list):
+        return res["data"]
+    return []
 
 def duffel_create_offer_request(slices: List[dict], passengers: List[dict], cabin: str) -> dict:
     """
