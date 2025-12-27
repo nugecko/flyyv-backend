@@ -3058,6 +3058,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
             rec = _USER_INFLIGHT.get(user_key)
             if rec:
                 previous_job_id = rec.get("job_id")
+                print(f"[guardrail] replacing_inflight user_key={user_key} prev_job_id={previous_job_id}")
                 _USER_INFLIGHT.pop(user_key, None)
 
         if previous_job_id:
