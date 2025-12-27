@@ -570,6 +570,11 @@ DUFFEL_VERSION = "v2"
 if not DUFFEL_ACCESS_TOKEN:
     print("WARNING: DUFFEL_ACCESS_TOKEN is not set, searches will fail")
 
+try:
+    print(f"[guardrail] request_keys={sorted(list(params.model_dump().keys()))}")
+except Exception:
+    pass
+
 MAX_OFFERS_PER_PAIR_HARD = 300
 MAX_OFFERS_TOTAL_HARD = 4000
 MAX_DATE_PAIRS_HARD = 60
