@@ -3039,8 +3039,24 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
             "message": "Missing user identity for multi-date searches. Please sign in and retry.",
         }
 
-    # ---- Per-user single-flight guard ----
+    # ---- Per-user single-flight guard (REPLACE mode) ----
+    # If the user already has an inflight async job, cancel it and start a new one.
+    previous_job_id = None
     if user_key:
+        with _USER_GUARD_LOCK:
+            rec = _USER_INFLIGHT.get(user_key)
+            if rec:
+                previous_job_id = rec.get("job_id")
+                _USER_INFLIGHT.pop(user_key, None)
+
+        if previous_job_id:
+            old = JOBS.get(previous_job_id)
+            if old and old.status in (JobStatus.PENDING, JobStatus.RUNNING):
+                old.status = JobStatus.CANCELLED
+                old.updated_at = datetime.utcnow()
+                JOBS[previous_job_id] = old
+            print(f"[guardrail] cancelled_previous user_key={user_key} job_id={previous_job_id}")
+
         if not _begin_user_inflight(user_key, job_id=None):
             print(f"[guardrail] search_in_progress user_key={user_key}")
             return {
