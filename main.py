@@ -3013,7 +3013,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     # If we cannot identify the user, allow only sync (single-pair) searches.
     # This prevents anonymous refresh spam from starting multiple async jobs.
     if not user_key and estimated_pairs > 1:
-        print("[guardrail] missing_user_id blocking async multi-date search")
+        print(f"[guardrail] missing_user_id origin={params.origin} dest={params.destination} earliest={params.earliestDeparture} latest={params.latestDeparture} minStay={params.minStayDays} maxStay={params.maxStayDays}")
         return {
             "status": "error",
             "source": "missing_user_id",
