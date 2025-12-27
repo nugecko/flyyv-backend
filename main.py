@@ -1867,7 +1867,7 @@ def run_search_job(job_id: str):
                 counts[a] = counts.get(a, 0) + 1
             return picked
 
-                executor = ThreadPoolExecutor(max_workers=parallel_workers)
+        executor = ThreadPoolExecutor(max_workers=parallel_workers)
         cancelled = False
         try:
             for batch_start in range(0, total_pairs, parallel_workers):
