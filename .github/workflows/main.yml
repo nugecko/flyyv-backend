@@ -22,7 +22,8 @@ jobs:
 
       - name: Add Dokku host to known_hosts
         run: |
-          ssh-keyscan -H api.flyyv.com >> ~/.ssh/known_hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -T 10 -H api.flyyv.com 2>/dev/null >> ~/.ssh/known_hosts || true
 
       - name: Push to Dokku
         run: |
