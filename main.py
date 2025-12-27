@@ -271,7 +271,7 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-
+    CANCELLED = "cancelled"
 
 class CabinClass(str, Enum):
     ECONOMY = "ECONOMY"
