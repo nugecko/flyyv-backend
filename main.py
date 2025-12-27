@@ -3490,6 +3490,13 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
         dep_start = payload.departure_start
         dep_end = payload.departure_end or dep_start
 
+        # Ensure DB-safe default for alert_type, Postgres column is NOT NULL
+        resolved_alert_type = (
+            "under_price"
+            if payload.max_price is not None
+            else (payload.alert_type or "new_best")
+        )
+
         alert = Alert(
             id=alert_id,
             user_email=app_user.email,
@@ -3502,12 +3509,6 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
             departure_end=dep_end,
             return_start=payload.return_start,
             return_end=payload.return_end,
-            # Ensure DB-safe default for alert_type, Postgres column is NOT NULL
-            resolved_alert_type = (
-                "under_price"
-                if payload.max_price is not None
-                else (payload.alert_type or "new_best")
-            )
             alert_type=resolved_alert_type,
             max_price=payload.max_price,
             mode=mode_value,
@@ -3518,6 +3519,7 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
             created_at=now,
             updated_at=now,
         )
+
 
         if hasattr(alert, "passengers"):
             alert.passengers = pax
