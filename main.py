@@ -3286,10 +3286,11 @@ def user_sync(payload: UserSyncPayload):
             user.marketing_consent = payload.marketing_consent
             user.source = payload.source or user.source
 
-        # 5) Ensure entitlements exist, and lock Free plan values
+        # 5) Ensure entitlements exist, and lock plan values where required
         if getattr(user, "plan_tier", None) in (None, ""):
             user.plan_tier = FREE_DEFAULTS["plan_tier"]
 
+        # Ensure entitlement fields exist, defaulting to Free for safety
         if getattr(user, "plan_active_alert_limit", None) is None:
             user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
 
@@ -3299,10 +3300,17 @@ def user_sync(payload: UserSyncPayload):
         if getattr(user, "plan_checks_per_day", None) is None:
             user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
+        # Lock Free plan values
         if user.plan_tier == "free":
             user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
+
+        # Lock Tester plan values (effectively unlimited)
+        if user.plan_tier == "tester":
+            user.plan_active_alert_limit = TESTER_DEFAULTS["plan_active_alert_limit"]
+            user.plan_max_departure_window_days = TESTER_DEFAULTS["plan_max_departure_window_days"]
+            user.plan_checks_per_day = TESTER_DEFAULTS["plan_checks_per_day"]
 
         db.commit()
         db.refresh(user)
