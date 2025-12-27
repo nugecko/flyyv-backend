@@ -3502,7 +3502,13 @@ def create_alert(payload: AlertCreate, x_user_id: str = Header(..., alias="X-Use
             departure_end=dep_end,
             return_start=payload.return_start,
             return_end=payload.return_end,
-            alert_type=("under_price" if payload.max_price is not None else payload.alert_type),
+            # Ensure DB-safe default for alert_type, Postgres column is NOT NULL
+            resolved_alert_type = (
+                "under_price"
+                if payload.max_price is not None
+                else (payload.alert_type or "new_best")
+            )
+            alert_type=resolved_alert_type,
             max_price=payload.max_price,
             mode=mode_value,
             last_price=None,
