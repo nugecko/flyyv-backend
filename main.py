@@ -2913,7 +2913,6 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
 # SECTION END: ROOT, HEALTH AND ROUTES
 # =====================================================================
 
-
 # =====================================================================
 # SECTION START: MAIN SEARCH ROUTES
 # =====================================================================
@@ -2925,26 +2924,23 @@ import time
 import threading
 from contextlib import contextmanager
 
-MAX_CONCURRENT_SEARCHES = get_config_int("MAX_CONCURRENT_SEARCHES", 2)  # example: 2
-SEARCH_HARD_CAP_SECONDS = get_config_int("SEARCH_HARD_CAP_SECONDS", 70)  # example: 70
+MAX_CONCURRENT_SEARCHES = get_config_int("MAX_CONCURRENT_SEARCHES", 2)
+SEARCH_HARD_CAP_SECONDS = get_config_int("SEARCH_HARD_CAP_SECONDS", 70)
 
 _GLOBAL_SEARCH_SEM = threading.Semaphore(MAX_CONCURRENT_SEARCHES)
 _USER_GUARD_LOCK = threading.Lock()
 _USER_INFLIGHT = {}  # user_key -> {"job_id": str|None, "started_at": float}
 
-def _user_key_from_params(params: SearchParams) -> str:
-    # Prefer a stable user identifier if present
-    for k in ("user_email", "userEmail", "user_external_id", "userExternalId", "user_id", "userId"):
+def _user_key_from_params(params: SearchParams) -> str | None:
+    """
+    IMPORTANT: Per-user single-flight only works if this is truly stable.
+    Do NOT fallback to origin/destination for async scans, it will fail to block overlaps reliably.
+    """
+    for k in ("user_external_id", "userExternalId", "user_email", "userEmail"):
         v = getattr(params, k, None)
         if v:
             return str(v).strip().lower()
-
-    # Fallback: make a best-effort key from core search identity
-    origin = getattr(params, "origin", None) or ""
-    destination = getattr(params, "destination", None) or ""
-    cabin = getattr(params, "cabin", None) or ""
-    pax = getattr(params, "passengers", None) or ""
-    return f"anon:{origin}:{destination}:{cabin}:{pax}"
+    return None
 
 @contextmanager
 def _hard_runtime_cap(seconds: int):
@@ -2970,9 +2966,6 @@ def _hard_runtime_cap(seconds: int):
         t.cancel()
 
 def _begin_user_inflight(user_key: str, job_id: str | None) -> bool:
-    """
-    Returns True if we successfully mark inflight, False if already inflight.
-    """
     now = time.monotonic()
     with _USER_GUARD_LOCK:
         if user_key in _USER_INFLIGHT:
@@ -3015,24 +3008,33 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         params.cabin = default_cabin
 
     user_key = _user_key_from_params(params)
+    estimated_pairs = estimate_date_pairs(params)
 
-    # ---- Per-user single-flight guard ----
-    # If a user is already running a search, reject immediately.
-    # This prevents refresh spam and double-click overlaps.
-    if not _begin_user_inflight(user_key, job_id=None):
-        print(f"[guardrail] search_in_progress user_key={user_key}")
+    # If we cannot identify the user, allow only sync (single-pair) searches.
+    # This prevents anonymous refresh spam from starting multiple async jobs.
+    if not user_key and estimated_pairs > 1:
+        print("[guardrail] missing_user_id blocking async multi-date search")
         return {
             "status": "error",
-            "source": "search_in_progress",
-            "message": "A search is already running for this user, please wait for it to finish.",
+            "source": "missing_user_id",
+            "message": "Missing user identity for multi-date searches. Please sign in and retry.",
         }
 
-    estimated_pairs = estimate_date_pairs(params)
+    # ---- Per-user single-flight guard ----
+    if user_key:
+        if not _begin_user_inflight(user_key, job_id=None):
+            print(f"[guardrail] search_in_progress user_key={user_key}")
+            return {
+                "status": "error",
+                "source": "search_in_progress",
+                "message": "A search is already running for this user, please wait for it to finish.",
+            }
 
     # ---- Global concurrency guard ----
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
     if not acquired:
-        _end_user_inflight(user_key)
+        if user_key:
+            _end_user_inflight(user_key)
         print(f"[guardrail] server_busy user_key={user_key}")
         return {
             "status": "error",
@@ -3067,36 +3069,40 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         JOBS[job_id] = job
         JOB_RESULTS[job_id] = []
 
-        # Update inflight record with job_id for better debugging
-        with _USER_GUARD_LOCK:
-            if user_key in _USER_INFLIGHT:
-                _USER_INFLIGHT[user_key]["job_id"] = job_id
+        if user_key:
+            with _USER_GUARD_LOCK:
+                if user_key in _USER_INFLIGHT:
+                    _USER_INFLIGHT[user_key]["job_id"] = job_id
 
-        # Guarded background job ensures:
-        # - hard runtime cap
-        # - releases per-user lock
-        # - releases global semaphore
-        background_tasks.add_task(_run_search_job_guarded, job_id, user_key)
+            background_tasks.add_task(_run_search_job_guarded, job_id, user_key)
+        else:
+            # This should not happen due to the guard above, but keep it safe.
+            _GLOBAL_SEARCH_SEM.release()
+            return {
+                "status": "error",
+                "source": "missing_user_id",
+                "message": "Missing user identity for multi-date searches. Please sign in and retry.",
+            }
 
         return {"status": "ok", "mode": "async", "jobId": job_id, "message": "Search started"}
 
     except Exception as e:
-        # Fail-safe: never leave locks held on errors
-        _end_user_inflight(user_key)
+        if user_key:
+            _end_user_inflight(user_key)
         _GLOBAL_SEARCH_SEM.release()
         raise e
 
     finally:
-        # Sync path returns inside try, but this finally still runs.
-        # For async path we do NOT release here, the background guard does it.
+        # For sync we release here.
+        # For async the guarded background task releases.
         if estimated_pairs <= 1:
-            _end_user_inflight(user_key)
+            if user_key:
+                _end_user_inflight(user_key)
             _GLOBAL_SEARCH_SEM.release()
 
 # =====================================================================
 # SECTION END: MAIN SEARCH ROUTES
 # =====================================================================
-
 
 # =====================================================================
 # SECTION START: SEARCH STATUS AND RESULTS ROUTES
