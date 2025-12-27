@@ -785,13 +785,24 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
             or resp.headers.get("X-Request-Id")
             or resp.headers.get("X-Correlation-Id")
         )
+    if resp.status_code >= 400:
+        safe_body = (resp.text or "")
+        safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
         logger.warning(
             "Duffel GET %s status=%s request_id=%s body=%s",
             path,
             resp.status_code,
             request_id,
-            (resp.text or "")[:4000],
+            safe_body[:1200],
         )
+    else:
+        logger.info(
+            "Duffel GET %s status=%s request_id=%s",
+            path,
+            resp.status_code,
+            request_id,
+        )
+
     except Exception:
         pass
 
