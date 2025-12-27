@@ -2918,10 +2918,85 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
 # SECTION START: MAIN SEARCH ROUTES
 # =====================================================================
 
+# ---- Guardrails (in-memory, single-process) ----
+# NOTE: If you ever run multiple workers/processes, these must move to Redis/queue.
+import os
+import time
+import threading
+from contextlib import contextmanager
+
+MAX_CONCURRENT_SEARCHES = get_config_int("MAX_CONCURRENT_SEARCHES", 2)  # example: 2
+SEARCH_HARD_CAP_SECONDS = get_config_int("SEARCH_HARD_CAP_SECONDS", 70)  # example: 70
+
+_GLOBAL_SEARCH_SEM = threading.Semaphore(MAX_CONCURRENT_SEARCHES)
+_USER_GUARD_LOCK = threading.Lock()
+_USER_INFLIGHT = {}  # user_key -> {"job_id": str|None, "started_at": float}
+
+def _user_key_from_params(params: SearchParams) -> str:
+    # Prefer a stable user identifier if present
+    for k in ("user_email", "userEmail", "user_external_id", "userExternalId", "user_id", "userId"):
+        v = getattr(params, k, None)
+        if v:
+            return str(v).strip().lower()
+
+    # Fallback: make a best-effort key from core search identity
+    origin = getattr(params, "origin", None) or ""
+    destination = getattr(params, "destination", None) or ""
+    cabin = getattr(params, "cabin", None) or ""
+    pax = getattr(params, "passengers", None) or ""
+    return f"anon:{origin}:{destination}:{cabin}:{pax}"
+
+@contextmanager
+def _hard_runtime_cap(seconds: int):
+    """
+    Hard cap: if the work hangs, force-kill this process.
+    This is intentionally brutal, but it prevents infinite hangs.
+    Dokku should restart the container.
+    """
+    if not seconds or seconds <= 0:
+        yield
+        return
+
+    def _kill():
+        print(f"[guardrail] HARD CAP HIT after {seconds}s, forcing process exit")
+        os._exit(1)
+
+    t = threading.Timer(seconds, _kill)
+    t.daemon = True
+    t.start()
+    try:
+        yield
+    finally:
+        t.cancel()
+
+def _begin_user_inflight(user_key: str, job_id: str | None) -> bool:
+    """
+    Returns True if we successfully mark inflight, False if already inflight.
+    """
+    now = time.monotonic()
+    with _USER_GUARD_LOCK:
+        if user_key in _USER_INFLIGHT:
+            return False
+        _USER_INFLIGHT[user_key] = {"job_id": job_id, "started_at": now}
+        return True
+
+def _end_user_inflight(user_key: str):
+    with _USER_GUARD_LOCK:
+        _USER_INFLIGHT.pop(user_key, None)
+
+def _run_search_job_guarded(job_id: str, user_key: str):
+    try:
+        with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
+            run_search_job(job_id)
+    finally:
+        _end_user_inflight(user_key)
+        _GLOBAL_SEARCH_SEM.release()
+
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not DUFFEL_ACCESS_TOKEN:
         return {"status": "error", "source": "duffel_not_configured", "options": []}
+
     print(
         f"[search_business] search_mode={getattr(params,'search_mode',None)} "
         f"earliestDeparture={getattr(params,'earliestDeparture',None)} "
@@ -2939,28 +3014,83 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not params.cabin:
         params.cabin = default_cabin
 
+    user_key = _user_key_from_params(params)
+
+    # ---- Per-user single-flight guard ----
+    # If a user is already running a search, reject immediately.
+    # This prevents refresh spam and double-click overlaps.
+    if not _begin_user_inflight(user_key, job_id=None):
+        return {
+            "status": "error",
+            "source": "search_in_progress",
+            "message": "A search is already running for this user, please wait for it to finish.",
+        }
+
     estimated_pairs = estimate_date_pairs(params)
 
-    if estimated_pairs <= 1:
-        options = run_duffel_scan(params)
-        options = apply_global_airline_cap(options, max_share=0.5)
-        return {"status": "ok", "mode": "sync", "source": "duffel", "options": [o.dict() for o in options]}
+    # ---- Global concurrency guard ----
+    # Limit total concurrent searches across all users.
+    acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
+    if not acquired:
+        _end_user_inflight(user_key)
+        return {
+            "status": "error",
+            "source": "server_busy",
+            "message": "Server is busy running other searches, please retry in a moment.",
+        }
 
-    job_id = str(uuid4())
-    job = SearchJob(
-        id=job_id,
-        status=JobStatus.PENDING,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-        params=params,
-        total_pairs=0,
-        processed_pairs=0,
-    )
-    JOBS[job_id] = job
-    JOB_RESULTS[job_id] = []
-    background_tasks.add_task(run_search_job, job_id)
+    try:
+        # ---- Sync path (single pair) ----
+        if estimated_pairs <= 1:
+            with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
+                options = run_duffel_scan(params)
+                options = apply_global_airline_cap(options, max_share=0.5)
+                return {
+                    "status": "ok",
+                    "mode": "sync",
+                    "source": "duffel",
+                    "options": [o.dict() for o in options],
+                }
 
-    return {"status": "ok", "mode": "async", "jobId": job_id, "message": "Search started"}
+        # ---- Async path (multi pair) ----
+        job_id = str(uuid4())
+        job = SearchJob(
+            id=job_id,
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            params=params,
+            total_pairs=0,
+            processed_pairs=0,
+        )
+        JOBS[job_id] = job
+        JOB_RESULTS[job_id] = []
+
+        # Update inflight record with job_id for better debugging
+        with _USER_GUARD_LOCK:
+            if user_key in _USER_INFLIGHT:
+                _USER_INFLIGHT[user_key]["job_id"] = job_id
+
+        # Guarded background job ensures:
+        # - hard runtime cap
+        # - releases per-user lock
+        # - releases global semaphore
+        background_tasks.add_task(_run_search_job_guarded, job_id, user_key)
+
+        return {"status": "ok", "mode": "async", "jobId": job_id, "message": "Search started"}
+
+    except Exception as e:
+        # Fail-safe: never leave locks held on errors
+        _end_user_inflight(user_key)
+        _GLOBAL_SEARCH_SEM.release()
+        raise e
+
+    finally:
+        # Sync path returns inside try, but this finally still runs.
+        # For async path we do NOT release here, the background guard does it.
+        if estimated_pairs <= 1:
+            _end_user_inflight(user_key)
+            _GLOBAL_SEARCH_SEM.release()
 
 # =====================================================================
 # SECTION END: MAIN SEARCH ROUTES
