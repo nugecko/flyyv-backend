@@ -3026,6 +3026,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         params.cabin = default_cabin
 
     user_key = _user_key_from_params(params)
+    print(f"[guardrail] user_external_id_raw={repr(getattr(params, 'user_external_id', None))} user_key={repr(user_key)}")
     estimated_pairs = estimate_date_pairs(params)
 
     # If we cannot identify the user, allow only sync (single-pair) searches.
