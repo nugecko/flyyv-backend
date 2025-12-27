@@ -1867,12 +1867,15 @@ def run_search_job(job_id: str):
                 counts[a] = counts.get(a, 0) + 1
             return picked
 
-        with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                executor = ThreadPoolExecutor(max_workers=parallel_workers)
+        cancelled = False
+        try:
             for batch_start in range(0, total_pairs, parallel_workers):
                 if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
                     print(f"[JOB {job_id}] Cancelled, stopping before batch_submit")
-                    return
-                    
+                    cancelled = True
+                    break
+
                 if total_count >= max_offers_total:
                     print(f"[JOB {job_id}] Reached max_offers_total before batch, stopping")
                     break
@@ -1893,7 +1896,15 @@ def run_search_job(job_id: str):
                     for future in as_completed(futures, timeout=batch_timeout_seconds):
                         if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
                             print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
-                            return
+                            cancelled = True
+                            # Best effort, cancel anything not yet started
+                            for f in futures.keys():
+                                try:
+                                    f.cancel()
+                                except Exception:
+                                    pass
+                            break
+
                         dep, ret = futures[future]
 
                         job.processed_pairs += 1
@@ -1946,9 +1957,7 @@ def run_search_job(job_id: str):
                         if not balanced_pair:
                             continue
 
-                        # Keep your existing "stricter per-pair cap" behavior.
-                        # If apply_global_airline_cap is truly global-only in semantics, it still works
-                        # as a final safeguard inside this curated list.
+                        # Final safeguard inside this curated list
                         balanced_pair = apply_global_airline_cap(balanced_pair, max_share=per_pair_airline_cap_pct)
 
                         try:
@@ -1993,8 +2002,22 @@ def run_search_job(job_id: str):
                     JOBS[job_id] = job
                     return
 
+                if cancelled:
+                    break
+
                 if total_count >= max_offers_total:
                     break
+
+            if cancelled:
+                job = JOBS.get(job_id)
+                if job:
+                    job.status = JobStatus.CANCELLED
+                    job.updated_at = datetime.utcnow()
+                    JOBS[job_id] = job
+                return
+
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         final_results = JOB_RESULTS.get(job_id, [])
         final_results = apply_global_airline_cap(final_results, max_share=0.5)
