@@ -2969,7 +2969,7 @@ def _hard_runtime_cap(seconds: int):
 def _begin_user_inflight(user_key: str, job_id: str | None) -> bool:
     now = time.monotonic()
     with _USER_GUARD_LOCK:
-         # TTL cleanup: if a lock is older than hard cap + buffer, drop it
+        # TTL cleanup: if a lock is older than hard cap + buffer, drop it
         rec = _USER_INFLIGHT.get(user_key)
         if rec and (now - rec.get("started_at", now)) > (SEARCH_HARD_CAP_SECONDS + 30):
             print(f"[guardrail] stale_inflight_cleared user_key={user_key}")
