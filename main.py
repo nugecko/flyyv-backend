@@ -3020,11 +3020,12 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     # If a user is already running a search, reject immediately.
     # This prevents refresh spam and double-click overlaps.
     if not _begin_user_inflight(user_key, job_id=None):
-        return {
-            "status": "error",
-            "source": "search_in_progress",
-            "message": "A search is already running for this user, please wait for it to finish.",
-        }
+    print(f"[guardrail] search_in_progress user_key={user_key}")
+    return {
+        "status": "error",
+        "source": "search_in_progress",
+        "message": "A search is already running for this user, please wait for it to finish.",
+    }
 
     estimated_pairs = estimate_date_pairs(params)
 
@@ -3033,6 +3034,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
     if not acquired:
         _end_user_inflight(user_key)
+        print(f"[guardrail] server_busy user_key={user_key}")
         return {
             "status": "error",
             "source": "server_busy",
