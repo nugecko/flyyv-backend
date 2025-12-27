@@ -718,25 +718,22 @@ def duffel_post(path: str, payload: dict) -> dict:
     except Exception:
         data = {"raw": resp.text}
 
-    # Log response details for debugging (never log the token)
+        # Debug log to stdout (Dokku logs)
     try:
-        import logging
-        logger = logging.getLogger("duffel")
         request_id = (
             resp.headers.get("Request-Id")
             or resp.headers.get("Duffel-Request-Id")
             or resp.headers.get("X-Request-Id")
             or resp.headers.get("X-Correlation-Id")
         )
+
         safe_body = (resp.text or "")
         safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
-        logger.warning(
-            "Duffel POST %s status=%s request_id=%s body=%s",
-            path,
-            resp.status_code,
-            request_id,
-            safe_body[:2000],
-        )
+
+        if resp.status_code >= 400:
+            print(f"Duffel POST {path} status={resp.status_code} request_id={request_id} body={safe_body[:2000]}")
+        else:
+            print(f"Duffel POST {path} status={resp.status_code} request_id={request_id}")
     except Exception:
         pass
 
