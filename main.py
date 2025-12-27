@@ -1755,6 +1755,10 @@ def run_search_job(job_id: str):
         print(f"[JOB {job_id}] Job not found in memory")
         return
 
+    if job.status == JobStatus.CANCELLED:
+        print(f"[JOB {job_id}] Cancelled before start")
+        return
+
     job.status = JobStatus.RUNNING
     job.updated_at = datetime.utcnow()
     JOBS[job_id] = job
@@ -1865,6 +1869,10 @@ def run_search_job(job_id: str):
 
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
             for batch_start in range(0, total_pairs, parallel_workers):
+                if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
+                    print(f"[JOB {job_id}] Cancelled, stopping before batch_submit")
+                    return
+                    
                 if total_count >= max_offers_total:
                     print(f"[JOB {job_id}] Reached max_offers_total before batch, stopping")
                     break
@@ -1883,6 +1891,9 @@ def run_search_job(job_id: str):
 
                 try:
                     for future in as_completed(futures, timeout=batch_timeout_seconds):
+                        if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
+                            print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
+                            return
                         dep, ret = futures[future]
 
                         job.processed_pairs += 1
