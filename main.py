@@ -250,6 +250,7 @@ class CreditUpdateRequest(BaseModel):
 class SearchParams(BaseModel):
     origin: str
     destination: str
+    user_external_id: Optional[str] = None
     earliestDeparture: date
     latestDeparture: date
     minStayDays: int
