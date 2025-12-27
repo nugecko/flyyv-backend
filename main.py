@@ -2974,8 +2974,10 @@ def _begin_user_inflight(user_key: str, job_id: str | None) -> bool:
         if rec and (now - rec.get("started_at", now)) > (SEARCH_HARD_CAP_SECONDS + 30):
             print(f"[guardrail] stale_inflight_cleared user_key={user_key}")
             _USER_INFLIGHT.pop(user_key, None)
+
         if user_key in _USER_INFLIGHT:
             return False
+
         _USER_INFLIGHT[user_key] = {"job_id": job_id, "started_at": now}
         return True
 
