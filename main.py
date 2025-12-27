@@ -775,7 +775,7 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
     except Exception:
         data = {"raw": resp.text}
 
-    # Optional debug log
+    # Optional debug log (short on success, body only on error)
     try:
         import logging
         logger = logging.getLogger("duffel")
@@ -785,31 +785,26 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
             or resp.headers.get("X-Request-Id")
             or resp.headers.get("X-Correlation-Id")
         )
-    if resp.status_code >= 400:
-        safe_body = (resp.text or "")
-        safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
-        logger.warning(
-            "Duffel GET %s status=%s request_id=%s body=%s",
-            path,
-            resp.status_code,
-            request_id,
-            safe_body[:1200],
-        )
-    else:
-        logger.info(
-            "Duffel GET %s status=%s request_id=%s",
-            path,
-            resp.status_code,
-            request_id,
-        )
 
+        if resp.status_code >= 400:
+            safe_body = (resp.text or "")
+            safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
+            logger.warning(
+                "Duffel GET %s status=%s request_id=%s body=%s",
+                path,
+                resp.status_code,
+                request_id,
+                safe_body[:1200],
+            )
+        else:
+            logger.info(
+                "Duffel GET %s status=%s request_id=%s",
+                path,
+                resp.status_code,
+                request_id,
+            )
     except Exception:
         pass
-
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=data)
-
-    return data
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
@@ -818,7 +813,6 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
     if isinstance(data, dict) and "data" in data:
         return data["data"]
     return data
-
 
 def duffel_list_offers(offer_request_id: str, limit: int = 100) -> List[dict]:
     """
