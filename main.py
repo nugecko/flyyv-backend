@@ -3239,6 +3239,13 @@ def user_sync(payload: UserSyncPayload):
             "plan_checks_per_day": 3,
         }
 
+        TESTER_DEFAULTS = {
+            "plan_tier": "tester",
+            "plan_active_alert_limit": 10_000,        # effectively unlimited
+            "plan_max_departure_window_days": 365,    # effectively unlimited
+            "plan_checks_per_day": 10_000,            # effectively unlimited
+        }
+
         # 1) Primary lookup: identity chain
         user = (
             db.query(AppUser)
