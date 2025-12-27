@@ -766,10 +766,8 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
     except Exception:
         data = {"raw": resp.text}
 
-    # Optional debug log (short on success, body only on error)
+    # Debug log to stdout (Dokku logs)
     try:
-        import logging
-        logger = logging.getLogger("duffel")
         request_id = (
             resp.headers.get("Request-Id")
             or resp.headers.get("Duffel-Request-Id")
@@ -780,22 +778,14 @@ def duffel_get(path: str, params: Optional[dict] = None) -> dict:
         if resp.status_code >= 400:
             safe_body = (resp.text or "")
             safe_body = safe_body.replace("\n", "\\n").replace("\r", "\\r")
-            logger.warning(
-                "Duffel GET %s status=%s request_id=%s body=%s",
-                path,
-                resp.status_code,
-                request_id,
-                safe_body[:1200],
+            print(
+                f"Duffel GET {path} status={resp.status_code} request_id={request_id} body={safe_body[:1200]}"
             )
         else:
-            logger.info(
-                "Duffel GET %s status=%s request_id=%s",
-                path,
-                resp.status_code,
-                request_id,
-            )
+            print(f"Duffel GET {path} status={resp.status_code} request_id={request_id}")
     except Exception:
         pass
+
 
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=data)
