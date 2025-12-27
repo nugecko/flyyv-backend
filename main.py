@@ -3030,7 +3030,6 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     estimated_pairs = estimate_date_pairs(params)
 
     # ---- Global concurrency guard ----
-    # Limit total concurrent searches across all users.
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
     if not acquired:
         _end_user_inflight(user_key)
