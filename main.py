@@ -3046,8 +3046,9 @@ def _run_search_job_guarded(job_id: str, user_key: str):
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
+    request_id = str(uuid4())
+
     if not DUFFEL_ACCESS_TOKEN:
-        request_id = str(uuid4())
         return {"status": "error", "source": "duffel_not_configured", "options": []}
 
     try:
