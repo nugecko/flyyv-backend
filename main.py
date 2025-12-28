@@ -3026,6 +3026,16 @@ def _end_user_inflight(user_key: str):
     with _USER_GUARD_LOCK:
         _USER_INFLIGHT.pop(user_key, None)
 
+def _peek_user_inflight(user_key: str):
+    """Return (job_id, age_seconds) for current inflight record, or (None, None)."""
+    now = time.monotonic()
+    with _USER_GUARD_LOCK:
+        rec = _USER_INFLIGHT.get(user_key) or {}
+        job_id = rec.get("job_id")
+        started_at = rec.get("started_at")
+    age = (now - started_at) if started_at else None
+    return job_id, age
+
 def _run_search_job_guarded(job_id: str, user_key: str):
     try:
         with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
@@ -3037,6 +3047,7 @@ def _run_search_job_guarded(job_id: str, user_key: str):
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     if not DUFFEL_ACCESS_TOKEN:
+        request_id = str(uuid4())
         return {"status": "error", "source": "duffel_not_configured", "options": []}
 
     try:
@@ -3062,8 +3073,27 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         params.cabin = default_cabin
 
     user_key = _user_key_from_params(params)
-    print(f"[guardrail] user_external_id_raw={repr(getattr(params, 'user_external_id', None))} user_key={repr(user_key)}")
     estimated_pairs = estimate_date_pairs(params)
+
+    inflight_job_id = None
+    inflight_age = None
+    if user_key:
+        inflight_job_id, inflight_age = _peek_user_inflight(user_key)
+
+        print(
+            f"[trace] request_id={request_id} user_key={repr(user_key)} "
+            f"estimated_pairs={estimated_pairs} inflight_job_id={inflight_job_id} "
+            f"inflight_age_s={None if inflight_age is None else int(inflight_age)} "
+            f"origin={getattr(params,'origin',None)} dest={getattr(params,'destination',None)} "
+            f"search_mode={getattr(params,'search_mode',None)} "
+            f"earliestDeparture={getattr(params,'earliestDeparture',None)} "
+            f"latestDeparture={getattr(params,'latestDeparture',None)} "
+            f"nights={getattr(params,'nights',None)}"
+        )
+
+        print(
+            f"[guardrail] user_external_id_raw={repr(getattr(params, 'user_external_id', None))} user_key={repr(user_key)}"
+        )
 
     # If we cannot identify the user, allow only sync (single-pair) searches.
     # This prevents anonymous refresh spam from starting multiple async jobs.
