@@ -1641,6 +1641,36 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION END: SHARED SEARCH HELPERS
 # =====================================================================
 
+# ============================================================
+# ASYNC DATE-PAIR WORKER (CRITICAL)
+# ============================================================
+# This function is intentionally small and boring.
+#
+# WHY IT EXISTS:
+# - Async searches fan out into multiple date-pairs
+# - Each date-pair must behave exactly like a normal
+#   single-pair Duffel search
+# - We MUST NOT share SearchParams across threads
+#
+# DO NOT:
+# - Call Duffel directly here
+# - Re-implement filtering, curation, or airline caps
+# - Mutate the original params object
+#
+# WHAT THIS FUNCTION DOES:
+# 1. Clone SearchParams for a single dep/ret pair
+# 2. Force the search into single-pair mode
+# 3. Call the existing sync pipeline (run_duffel_scan)
+# 4. Return raw FlightOption results for this pair
+#
+# WHY THIS DESIGN:
+# - Keeps async and sync logic identical
+# - Prevents thread safety bugs
+# - Allows cancellation by killing the executor
+#
+# If async jobs hang or behave differently from sync,
+# this function is the FIRST place to check.
+# ============================================================
 def process_date_pair_offers(
     params: SearchParams,
     dep: date,
@@ -1684,7 +1714,9 @@ def process_date_pair_offers(
         options = options[: int(max_offers_pair)]
 
     return options
-
+# ============================================================
+# END - ASYNC DATE-PAIR WORKER (CRITICAL)
+# ============================================================
 
 # =====================================================================
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
