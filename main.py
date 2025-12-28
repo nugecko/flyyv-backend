@@ -3069,6 +3069,13 @@ def _run_search_job_guarded(job_id: str, user_key: str):
         with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
             run_search_job(job_id)
     finally:
+        try:
+            job = JOBS.get(job_id)
+            st = getattr(job, "status", None)
+            print(f"[JOB {job_id}] FINALLY reached status={st} user_key={user_key}")
+        except Exception as _e:
+            print(f"[JOB {job_id}] FINALLY reached log_failed: {_e}")
+
         _end_user_inflight(user_key)
         _GLOBAL_SEARCH_SEM.release()
 
