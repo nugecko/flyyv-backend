@@ -16,6 +16,7 @@ from email.message import EmailMessage
 from sqlalchemy import func
 from datetime import datetime
 from typing import Optional
+from concurrent.futures import wait, FIRST_COMPLETED
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
@@ -1889,19 +1890,32 @@ def run_search_job(job_id: str):
                     for dep, ret in batch_pairs
                 }
 
-                try:
-                    for future in as_completed(futures, timeout=batch_timeout_seconds):
-                        if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
-                            print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
-                            cancelled = True
-                            # Best effort, cancel anything not yet started
-                            for f in futures.keys():
-                                try:
-                                    f.cancel()
-                                except Exception:
-                                    pass
-                            break
+            try:
+                batch_started_at = time.monotonic()
+                pending = set(futures.keys())
 
+                while pending:
+                    # Fast cancellation check, every loop
+                    if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
+                        print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
+                        cancelled = True
+                        # Best effort: cancel anything not yet started
+                        for f in list(pending):
+                            try:
+                                f.cancel()
+                            except Exception:
+                                pass
+                        break
+
+                    elapsed = time.monotonic() - batch_started_at
+                    if elapsed > batch_timeout_seconds:
+                        raise TimeoutError(f"batch timeout after {batch_timeout_seconds}s")
+
+                    done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
+                    if not done:
+                        continue
+
+                    for future in done:
                         dep, ret = futures[future]
 
                         job.processed_pairs += 1
