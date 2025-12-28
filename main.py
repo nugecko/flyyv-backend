@@ -1678,42 +1678,46 @@ def process_date_pair_offers(
     max_offers_pair: int,
 ) -> List[FlightOption]:
     """
-    Build a single-date-pair SearchParams and run a normal Duffel scan for that pair.
-    Returns a list of FlightOption for this specific dep/ret.
+    Fetch offers for exactly one (dep, ret) pair from Duffel, then map to FlightOption.
+    This bypasses generate_date_pairs to avoid any param-shape ambiguity.
     """
-    # Create a per-pair params copy, avoid mutating the shared job.params
+    slices = [
+        {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
+        {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
+    ]
+    pax = [{"type": "adult"} for _ in range(params.passengers)]
+
+    per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
+    per_pair_limit = max(1, min(per_pair_limit, 100))
+
+    offers_json: List[dict] = []
     try:
-        pair_params = params.model_copy(
-            update={
-                "earliestDeparture": dep,
-                "latestDeparture": dep,
-                "minStayDays": None,
-                "maxStayDays": None,
-                "nights": None,
-            }
-        )
-    except Exception:
-        # Fallback for older pydantic usage
-        data = params.model_dump()
-        data["earliestDeparture"] = dep
-        data["latestDeparture"] = dep
-        data["minStayDays"] = None
-        data["maxStayDays"] = None
-        data["nights"] = None
-        pair_params = SearchParams(**data)
+        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
+        offer_request_id = offer_request.get("id")
+        if not offer_request_id:
+            return []
 
-    # Ensure the single pair is forced
-    setattr(pair_params, "departureDate", dep)
-    setattr(pair_params, "returnDate", ret)
+        inline = offer_request.get("offers") or []
+        if inline:
+            offers_json = inline[:per_pair_limit]
+        else:
+            offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
 
-    # Run the standard single-pair scan
-    options = run_duffel_scan(pair_params) or []
+    except HTTPException as e:
+        print(f"[pair_worker] Duffel HTTPException dep={dep} ret={ret}: {e.detail}")
+        return []
+    except Exception as e:
+        print(f"[pair_worker] Duffel error dep={dep} ret={ret}: {e}")
+        return []
 
-    # Defensive cap per pair
-    if max_offers_pair and len(options) > int(max_offers_pair):
-        options = options[: int(max_offers_pair)]
+    if not offers_json:
+        return []
 
-    return options
+    mapped: List[FlightOption] = [
+        map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
+        for offer in offers_json
+    ]
+    return mapped
 # ============================================================
 # END - ASYNC DATE-PAIR WORKER (CRITICAL)
 # ============================================================
