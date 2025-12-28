@@ -3125,13 +3125,21 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
                 JOBS[previous_job_id] = old
             print(f"[guardrail] cancelled_previous user_key={user_key} job_id={previous_job_id}")
 
-        if not _begin_user_inflight(user_key, job_id=None):
+                begin_ok = _begin_user_inflight(user_key, job_id=None)
+        if not begin_ok:
+            blocker_job_id, blocker_age = _peek_user_inflight(user_key)
+            print(
+                f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
+                f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
+            )
             print(f"[guardrail] search_in_progress user_key={user_key}")
             return {
                 "status": "error",
                 "source": "search_in_progress",
                 "message": "A search is already running for this user, please wait for it to finish.",
             }
+
+        print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)}")
 
     # ---- Global concurrency guard ----
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
