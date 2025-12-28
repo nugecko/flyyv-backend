@@ -3177,7 +3177,18 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)}")
 
     # ---- Global concurrency guard ----
+    # ---- Global concurrency guard ----
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
+    if not acquired:
+        # If we just cancelled a previous job for this same user, give the release a moment to land.
+        # Bounded wait to avoid hanging requests.
+        if previous_job_id:
+            for _ in range(4):  # up to ~2s total
+                time.sleep(0.5)
+                acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
+                if acquired:
+                    break
+
     if not acquired:
         if user_key:
             _end_user_inflight(user_key)
