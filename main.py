@@ -1892,8 +1892,29 @@ def run_search_job(job_id: str):
                     pending = set(futures.keys())
 
                     while pending:
+                        # Hard cap check, every second
+                        if job_id in _HARD_CAP_HIT:
+                            print(f"[JOB {job_id}] Hard cap flag set, cancelling job safely")
+                            cancelled = True
+                            try:
+                                j = JOBS.get(job_id)
+                                if j and j.status in (JobStatus.PENDING, JobStatus.RUNNING):
+                                    j.status = JobStatus.CANCELLED
+                                    j.updated_at = datetime.utcnow()
+                                    JOBS[job_id] = j
+                            except Exception:
+                                pass
+
+                            for f in list(pending):
+                                try:
+                                    f.cancel()
+                                except Exception:
+                                    pass
+                            break
+
                         # Cancellation check, every second
                         if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
+
                             print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
                             cancelled = True
                             for f in list(pending):
@@ -3012,22 +3033,28 @@ def _user_key_from_params(params: SearchParams) -> str | None:
             return str(v).strip().lower()
     return None
 
+# Hard cap flags, job_id -> cap hit
+_HARD_CAP_HIT = set()  # set[str]
+
 @contextmanager
-def _hard_runtime_cap(seconds: int):
+def _hard_runtime_cap(seconds: int, job_id: str | None = None):
     """
-    Hard cap: if the work hangs, force-kill this process.
-    This is intentionally brutal, but it prevents infinite hangs.
-    Dokku should restart the container.
+    Hard cap: if work hangs, do NOT kill the whole web process.
+    Instead, mark the job as capped and let the job loop cancel safely.
     """
     if not seconds or seconds <= 0:
         yield
         return
 
-    def _kill():
-        print(f"[guardrail] HARD CAP HIT after {seconds}s, forcing process exit")
-        os._exit(1)
+    def _flag():
+        if job_id:
+            try:
+                _HARD_CAP_HIT.add(job_id)
+            except Exception:
+                pass
+        print(f"[guardrail] HARD CAP HIT after {seconds}s job_id={job_id}")
 
-    t = threading.Timer(seconds, _kill)
+    t = threading.Timer(seconds, _flag)
     t.daemon = True
     t.start()
     try:
@@ -3066,7 +3093,7 @@ def _peek_user_inflight(user_key: str):
 
 def _run_search_job_guarded(job_id: str, user_key: str):
     try:
-        with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
+        with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS, job_id=job_id):
             run_search_job(job_id)
     finally:
         try:
@@ -3202,7 +3229,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     try:
         # ---- Sync path (single pair) ----
         if estimated_pairs <= 1:
-            with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS):
+            with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS, job_id=None):
                 options = run_duffel_scan(params)
                 options = apply_global_airline_cap(options, max_share=0.5)
                 return {
