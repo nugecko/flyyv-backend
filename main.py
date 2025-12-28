@@ -1641,6 +1641,51 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION END: SHARED SEARCH HELPERS
 # =====================================================================
 
+def process_date_pair_offers(
+    params: SearchParams,
+    dep: date,
+    ret: date,
+    max_offers_pair: int,
+) -> List[FlightOption]:
+    """
+    Build a single-date-pair SearchParams and run a normal Duffel scan for that pair.
+    Returns a list of FlightOption for this specific dep/ret.
+    """
+    # Create a per-pair params copy, avoid mutating the shared job.params
+    try:
+        pair_params = params.model_copy(
+            update={
+                "earliestDeparture": dep,
+                "latestDeparture": dep,
+                "minStayDays": None,
+                "maxStayDays": None,
+                "nights": None,
+            }
+        )
+    except Exception:
+        # Fallback for older pydantic usage
+        data = params.model_dump()
+        data["earliestDeparture"] = dep
+        data["latestDeparture"] = dep
+        data["minStayDays"] = None
+        data["maxStayDays"] = None
+        data["nights"] = None
+        pair_params = SearchParams(**data)
+
+    # Ensure the single pair is forced
+    setattr(pair_params, "departureDate", dep)
+    setattr(pair_params, "returnDate", ret)
+
+    # Run the standard single-pair scan
+    options = run_duffel_scan(pair_params) or []
+
+    # Defensive cap per pair
+    if max_offers_pair and len(options) > int(max_offers_pair):
+        options = options[: int(max_offers_pair)]
+
+    return options
+
+
 # =====================================================================
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
 # =====================================================================
