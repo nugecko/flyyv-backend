@@ -3169,11 +3169,11 @@ def get_search_status(job_id: str, preview_limit: int = 20):
     if not job:
         return SearchStatusResponse(
             jobId=job_id,
-            status=JobStatus.PENDING,
+            status=JobStatus.CANCELLED,
             processedPairs=0,
             totalPairs=0,
             progress=0.0,
-            error="Job not found in memory yet",
+            error="Job not found in memory, the server likely restarted. Please start a new search.",
             previewCount=0,
             previewOptions=[],
         )
