@@ -1889,17 +1889,19 @@ def run_search_job(job_id: str):
                     ): (dep, ret)
                     for dep, ret in batch_pairs
                 }
-
+       
+            # =====================================================================
+            # batch collection, cancellation responsive
+            # =====================================================================
             try:
                 batch_started_at = time.monotonic()
                 pending = set(futures.keys())
 
                 while pending:
-                    # Fast cancellation check, every loop
+                    # Fast cancellation check
                     if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
                         print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
                         cancelled = True
-                        # Best effort: cancel anything not yet started
                         for f in list(pending):
                             try:
                                 f.cancel()
@@ -2002,6 +2004,14 @@ def run_search_job(job_id: str):
                             break
 
                 except Exception as e:
+                    if cancelled or (JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED):
+                        job = JOBS.get(job_id)
+                        if job:
+                            job.status = JobStatus.CANCELLED
+                            job.updated_at = datetime.utcnow()
+                            JOBS[job_id] = job
+                        return
+
                     error_msg = (
                         f"Timed out or failed waiting for batch Duffel responses after "
                         f"{batch_timeout_seconds} seconds: {e}"
@@ -2012,6 +2022,7 @@ def run_search_job(job_id: str):
                     job.updated_at = datetime.utcnow()
                     JOBS[job_id] = job
                     return
+
 
                 if cancelled:
                     break
