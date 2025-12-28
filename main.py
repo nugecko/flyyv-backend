@@ -3125,7 +3125,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
                 JOBS[previous_job_id] = old
             print(f"[guardrail] cancelled_previous user_key={user_key} job_id={previous_job_id}")
 
-                begin_ok = _begin_user_inflight(user_key, job_id=None)
+        begin_ok = _begin_user_inflight(user_key, job_id=None)
         if not begin_ok:
             blocker_job_id, blocker_age = _peek_user_inflight(user_key)
             print(
