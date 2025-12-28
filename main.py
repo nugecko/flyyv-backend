@@ -1642,103 +1642,8 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # =====================================================================
 
 # =====================================================================
-# SECTION START: ASYNC JOB RUNNER
+# SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
 # =====================================================================
-
-def process_date_pair_offers(
-    params: SearchParams,
-    dep: date,
-    ret: date,
-    max_offers_pair: int,
-) -> List[FlightOption]:
-    """
-    Fetch offers for one (dep, ret) pair:
-      1) Duffel offers (limit=max_offers_pair)
-      2) Direct-only offers (small extra pool)
-      3) Merge direct-only into the pair pool without duplicates
-    """
-    slices = [
-        {
-            "origin": params.origin,
-            "destination": params.destination,
-            "departure_date": dep.isoformat(),
-        },
-        {
-            "origin": params.destination,
-            "destination": params.origin,
-            "departure_date": ret.isoformat(),
-        },
-    ]
-    pax = [{"type": "adult"} for _ in range(params.passengers)]
-
-    try:
-        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
-        offer_request_id = offer_request.get("id")
-        if not offer_request_id:
-            print(f"[PAIR {dep} -> {ret}] No offer_request id")
-            return []
-
-        offers_json = duffel_list_offers(offer_request_id, limit=max_offers_pair)
-    except HTTPException as e:
-        print(f"[PAIR {dep} -> {ret}] Duffel HTTPException: {e.detail}")
-        return []
-    except Exception as e:
-        print(f"[PAIR {dep} -> {ret}] Unexpected Duffel error: {e}")
-        return []
-
-    batch_mapped: List[FlightOption] = [
-        map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-        for offer in offers_json
-    ]
-
-    # Pull a small "direct-only" pool and merge in, this improves perceived trust and speed for users
-    try:
-        direct_options = fetch_direct_only_offers(
-            origin=params.origin,
-            destination=params.destination,
-            dep_date=dep,
-            ret_date=ret,
-            passengers=params.passengers,
-            cabin=params.cabin,
-            per_pair_limit=15,
-        )
-    except Exception as e:
-        print(f"[PAIR {dep} -> {ret}] direct_only error: {e}")
-        direct_options = []
-
-    if direct_options:
-        seen = set()
-        for opt in batch_mapped:
-            key = (
-                opt.airlineCode or opt.airline,
-                opt.departureDate,
-                opt.returnDate,
-                getattr(opt, "stops", getattr(opt, "numStops", None)),
-                opt.originAirport,
-                opt.destinationAirport,
-            )
-            seen.add(key)
-
-        added = 0
-        for opt in direct_options:
-            key = (
-                opt.airlineCode or opt.airline,
-                opt.departureDate,
-                opt.returnDate,
-                getattr(opt, "stops", getattr(opt, "numStops", None)),
-                opt.originAirport,
-                opt.destinationAirport,
-            )
-            if key in seen:
-                continue
-            batch_mapped.append(opt)
-            seen.add(key)
-            added += 1
-
-        print(f"[PAIR {dep} -> {ret}] merged {added} direct-only offers, total now {len(batch_mapped)}")
-
-    return batch_mapped
-
 
 def run_search_job(job_id: str):
     """
@@ -1770,7 +1675,7 @@ def run_search_job(job_id: str):
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
 
-        # Definitive truth for UI counters (async job path)
+        # ===== IDENTIFIER: PAIRS_FINAL_LOG =====
         p = job.params
         earliest = getattr(p, "earliestDeparture", None)
         latest = getattr(p, "latestDeparture", None)
@@ -1801,13 +1706,13 @@ def run_search_job(job_id: str):
             return
 
         total_count = 0
+
         parallel_workers = get_config_int("PARALLEL_WORKERS", PARALLEL_WORKERS)
         parallel_workers = max(1, min(parallel_workers, 16))
 
         batch_timeout_seconds = 120
 
-        # Read optional tuning knobs from admin_config (Directus).
-        # Defaults are safe and match your plan.
+        # ===== IDENTIFIER: TUNING_KNOBS =====
         direct_quota_pct_raw = get_config_str("DIRECT_QUOTA_PCT", None)
         per_pair_cap_pct_raw = get_config_str("PER_PAIR_AIRLINE_CAP_PCT", None)
 
@@ -1826,7 +1731,6 @@ def run_search_job(job_id: str):
 
         pair_cap = max(1, int(max_offers_pair))
 
-        # Convert pct to absolute per-airline cap inside each date-pair.
         if per_pair_airline_cap_pct <= 0.0:
             per_airline_cap = pair_cap
         else:
@@ -1837,6 +1741,7 @@ def run_search_job(job_id: str):
         direct_slots = max(0, min(direct_slots, pair_cap))
         non_direct_slots = pair_cap - direct_slots
 
+        # ===== IDENTIFIER: HELPERS_DIRECT_AIRLINE_CAP =====
         def _is_direct(opt: FlightOption) -> bool:
             stops_val = getattr(opt, "stops", getattr(opt, "numStops", None))
             if stops_val is None:
@@ -1865,10 +1770,13 @@ def run_search_job(job_id: str):
                 counts[a] = counts.get(a, 0) + 1
             return picked
 
+        # ===== IDENTIFIER: EXECUTOR_START =====
         executor = ThreadPoolExecutor(max_workers=parallel_workers)
         cancelled = False
+
         try:
             for batch_start in range(0, total_pairs, parallel_workers):
+                # ===== IDENTIFIER: CANCEL_CHECK_PRE_SUBMIT =====
                 if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
                     print(f"[JOB {job_id}] Cancelled, stopping before batch_submit")
                     cancelled = True
@@ -1879,6 +1787,7 @@ def run_search_job(job_id: str):
                     break
 
                 batch_pairs = date_pairs[batch_start : batch_start + parallel_workers]
+
                 futures = {
                     executor.submit(
                         process_date_pair_offers,
@@ -1889,127 +1798,131 @@ def run_search_job(job_id: str):
                     ): (dep, ret)
                     for dep, ret in batch_pairs
                 }
-       
-            # =====================================================================
-            # batch collection, cancellation responsive
-            # =====================================================================
-            try:
-                batch_started_at = time.monotonic()
-                pending = set(futures.keys())
 
-                while pending:
-                    # Fast cancellation check
-                    if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
-                        print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
-                        cancelled = True
-                        for f in list(pending):
-                            try:
-                                f.cancel()
-                            except Exception:
-                                pass
-                        break
+                # =====================================================================
+                # IDENTIFIER: BATCH_COLLECTION_CANCELLATION_RESPONSIVE_START
+                # =====================================================================
+                try:
+                    batch_started_at = time.monotonic()
+                    pending = set(futures.keys())
 
-                    elapsed = time.monotonic() - batch_started_at
-                    if elapsed > batch_timeout_seconds:
-                        raise TimeoutError(f"batch timeout after {batch_timeout_seconds}s")
-
-                    done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
-                    if not done:
-                        continue
-
-                    for future in done:
-                        dep, ret = futures[future]
-
-                        job.processed_pairs += 1
-                        job.updated_at = datetime.utcnow()
-                        JOBS[job_id] = job
-
-                        try:
-                            batch_mapped = future.result()
-                        except Exception as e:
-                            print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
-                            continue
-
-                        if not batch_mapped:
-                            continue
-
-                        # 1) Pair-level filtering only
-                        filtered_pair = apply_filters(batch_mapped, job.params)
-                        if not filtered_pair:
-                            continue
-
-                        # 2) Pair-level curation to pair_cap with direct quota and per-pair airline cap
-                        pair_direct = [o for o in filtered_pair if _is_direct(o)]
-                        pair_non_direct = [o for o in filtered_pair if not _is_direct(o)]
-
-                        picked_direct = _take_with_cap(pair_direct, direct_slots)
-
-                        # Roll unused direct slots into non-direct
-                        remaining_for_non_direct = non_direct_slots + max(0, direct_slots - len(picked_direct))
-                        picked_non_direct = _take_with_cap(pair_non_direct, remaining_for_non_direct)
-
-                        curated_pair = picked_direct + picked_non_direct
-
-                        # Top up if we still have room (airline cap too strict)
-                        if len(curated_pair) < pair_cap:
-                            seen_ids = {id(o) for o in curated_pair}
-                            for opt in filtered_pair:
-                                if len(curated_pair) >= pair_cap:
-                                    break
-                                if id(opt) in seen_ids:
-                                    continue
-                                curated_pair.append(opt)
-                                seen_ids.add(id(opt))
-
-                        # Final hard cap
-                        if len(curated_pair) > pair_cap:
-                            curated_pair = curated_pair[:pair_cap]
-
-                        # 3) Optional: keep your existing balance step (still inside this date-pair only)
-                        balanced_pair = balance_airlines(curated_pair, max_total=pair_cap)
-                        if not balanced_pair:
-                            continue
-
-                        # Final safeguard inside this curated list
-                        balanced_pair = apply_global_airline_cap(balanced_pair, max_share=per_pair_airline_cap_pct)
-
-                        try:
-                            direct_taken = sum(1 for o in balanced_pair if _is_direct(o))
-                            uniq_airlines = len({_airline_key(o) for o in balanced_pair})
-                            print(
-                                f"[PAIR {dep} -> {ret}] curated pair_cap={pair_cap}, "
-                                f"direct_slots={direct_slots}, direct_taken={direct_taken}, "
-                                f"returned={len(balanced_pair)}, uniq_airlines={uniq_airlines}"
-                            )
-                        except Exception as _e:
-                            print(f"[PAIR {dep} -> {ret}] curated debug failed: {_e}")
-
-                        # 4) Merge into global results with global caps as before
-                        current_results = JOB_RESULTS.get(job_id, [])
-                        remaining_slots = max_offers_total - len(current_results)
-                        if remaining_slots <= 0:
-                            total_count = len(current_results)
+                    while pending:
+                        # Cancellation check, every second
+                        if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
+                            print(f"[JOB {job_id}] Cancelled, stopping during batch_collect")
+                            cancelled = True
+                            for f in list(pending):
+                                try:
+                                    f.cancel()
+                                except Exception:
+                                    pass
                             break
 
-                        if len(balanced_pair) > remaining_slots:
-                            balanced_pair = balanced_pair[:remaining_slots]
+                        elapsed = time.monotonic() - batch_started_at
+                        if elapsed > batch_timeout_seconds:
+                            raise TimeoutError(f"batch timeout after {batch_timeout_seconds}s")
 
-                        merged = current_results + balanced_pair
-                        merged = apply_global_airline_cap(merged, max_share=0.5)
+                        done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
+                        if not done:
+                            continue
 
-                        JOB_RESULTS[job_id] = merged
-                        total_count = len(merged)
+                        for future in done:
+                            dep, ret = futures[future]
 
-                        if total_count >= max_offers_total:
-                            break
-
-                except Exception as e:
-                    if cancelled or (JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED):
-                        job = JOBS.get(job_id)
-                        if job:
-                            job.status = JobStatus.CANCELLED
+                            job.processed_pairs += 1
                             job.updated_at = datetime.utcnow()
                             JOBS[job_id] = job
+
+                            try:
+                                batch_mapped = future.result()
+                            except Exception as e:
+                                print(f"[JOB {job_id}] Future error for pair {dep} -> {ret}: {e}")
+                                continue
+
+                            if not batch_mapped:
+                                continue
+
+                            # ===== IDENTIFIER: PAIR_FILTERING =====
+                            filtered_pair = apply_filters(batch_mapped, job.params)
+                            if not filtered_pair:
+                                continue
+
+                            # ===== IDENTIFIER: PAIR_CURATION =====
+                            pair_direct = [o for o in filtered_pair if _is_direct(o)]
+                            pair_non_direct = [o for o in filtered_pair if not _is_direct(o)]
+
+                            picked_direct = _take_with_cap(pair_direct, direct_slots)
+
+                            remaining_for_non_direct = non_direct_slots + max(
+                                0, direct_slots - len(picked_direct)
+                            )
+                            picked_non_direct = _take_with_cap(pair_non_direct, remaining_for_non_direct)
+
+                            curated_pair = picked_direct + picked_non_direct
+
+                            if len(curated_pair) < pair_cap:
+                                seen_ids = {id(o) for o in curated_pair}
+                                for opt in filtered_pair:
+                                    if len(curated_pair) >= pair_cap:
+                                        break
+                                    if id(opt) in seen_ids:
+                                        continue
+                                    curated_pair.append(opt)
+                                    seen_ids.add(id(opt))
+
+                            if len(curated_pair) > pair_cap:
+                                curated_pair = curated_pair[:pair_cap]
+
+                            balanced_pair = balance_airlines(curated_pair, max_total=pair_cap)
+                            if not balanced_pair:
+                                continue
+
+                            balanced_pair = apply_global_airline_cap(
+                                balanced_pair, max_share=per_pair_airline_cap_pct
+                            )
+
+                            try:
+                                direct_taken = sum(1 for o in balanced_pair if _is_direct(o))
+                                uniq_airlines = len({_airline_key(o) for o in balanced_pair})
+                                print(
+                                    f"[PAIR {dep} -> {ret}] curated pair_cap={pair_cap}, "
+                                    f"direct_slots={direct_slots}, direct_taken={direct_taken}, "
+                                    f"returned={len(balanced_pair)}, uniq_airlines={uniq_airlines}"
+                                )
+                            except Exception as _e:
+                                print(f"[PAIR {dep} -> {ret}] curated debug failed: {_e}")
+
+                            # ===== IDENTIFIER: GLOBAL_MERGE =====
+                            current_results = JOB_RESULTS.get(job_id, [])
+                            remaining_slots = max_offers_total - len(current_results)
+                            if remaining_slots <= 0:
+                                total_count = len(current_results)
+                                break
+
+                            if len(balanced_pair) > remaining_slots:
+                                balanced_pair = balanced_pair[:remaining_slots]
+
+                            merged = current_results + balanced_pair
+                            merged = apply_global_airline_cap(merged, max_share=0.5)
+
+                            JOB_RESULTS[job_id] = merged
+                            total_count = len(merged)
+
+                            if total_count >= max_offers_total:
+                                break
+
+                    # If cancelled mid batch, stop outer loop too
+                    if cancelled:
+                        break
+
+                except Exception as e:
+                    # If user cancelled, treat as cancelled not failed
+                    if cancelled or (JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED):
+                        job2 = JOBS.get(job_id)
+                        if job2:
+                            job2.status = JobStatus.CANCELLED
+                            job2.updated_at = datetime.utcnow()
+                            JOBS[job_id] = job2
                         return
 
                     error_msg = (
@@ -2022,7 +1935,9 @@ def run_search_job(job_id: str):
                     job.updated_at = datetime.utcnow()
                     JOBS[job_id] = job
                     return
-
+                # =====================================================================
+                # IDENTIFIER: BATCH_COLLECTION_CANCELLATION_RESPONSIVE_END
+                # =====================================================================
 
                 if cancelled:
                     break
@@ -2030,17 +1945,20 @@ def run_search_job(job_id: str):
                 if total_count >= max_offers_total:
                     break
 
+            # ===== IDENTIFIER: CANCELLED_FINAL_STATUS =====
             if cancelled:
-                job = JOBS.get(job_id)
-                if job:
-                    job.status = JobStatus.CANCELLED
-                    job.updated_at = datetime.utcnow()
-                    JOBS[job_id] = job
+                job3 = JOBS.get(job_id)
+                if job3:
+                    job3.status = JobStatus.CANCELLED
+                    job3.updated_at = datetime.utcnow()
+                    JOBS[job_id] = job3
                 return
 
         finally:
+            # ===== IDENTIFIER: EXECUTOR_SHUTDOWN =====
             executor.shutdown(wait=False, cancel_futures=True)
 
+        # ===== IDENTIFIER: FINAL_RESULTS_AND_COMPLETE =====
         final_results = JOB_RESULTS.get(job_id, [])
         final_results = apply_global_airline_cap(final_results, max_share=0.5)
         JOB_RESULTS[job_id] = final_results
@@ -2058,7 +1976,7 @@ def run_search_job(job_id: str):
         print(f"[JOB {job_id}] FAILED: {e}")
 
 # =====================================================================
-# SECTION END: ASYNC JOB RUNNER
+# SECTION END: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
 # =====================================================================
 
 # =====================================================================
