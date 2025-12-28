@@ -1674,7 +1674,7 @@ def run_search_job(job_id: str):
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
-        print(f"[JOB {job_id}] date_pairs_ready total_pairs={total_pairs} workers={parallel_workers}")
+        print(f"[JOB {job_id}] date_pairs_ready total_pairs={total_pairs}")
 
         # ===== IDENTIFIER: PAIRS_FINAL_LOG =====
         p = job.params
@@ -1712,6 +1712,7 @@ def run_search_job(job_id: str):
         parallel_workers = max(1, min(parallel_workers, 16))
 
         batch_timeout_seconds = 120
+        print(f"[JOB {job_id}] job_config workers={parallel_workers} batch_timeout_s={batch_timeout_seconds} max_pairs={max_pairs} max_offers_pair={max_offers_pair} max_offers_total={max_offers_total}")
 
         # ===== IDENTIFIER: TUNING_KNOBS =====
         direct_quota_pct_raw = get_config_str("DIRECT_QUOTA_PCT", None)
