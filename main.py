@@ -1674,6 +1674,7 @@ def run_search_job(job_id: str):
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
+        print(f"[JOB {job_id}] date_pairs_ready total_pairs={total_pairs} workers={parallel_workers}")
 
         # ===== IDENTIFIER: PAIRS_FINAL_LOG =====
         p = job.params
@@ -1787,6 +1788,7 @@ def run_search_job(job_id: str):
                     break
 
                 batch_pairs = date_pairs[batch_start : batch_start + parallel_workers]
+                print(f"[JOB {job_id}] batch_submit start={batch_start} batch_size={len(batch_pairs)}")
 
                 futures = {
                     executor.submit(
@@ -1798,6 +1800,7 @@ def run_search_job(job_id: str):
                     ): (dep, ret)
                     for dep, ret in batch_pairs
                 }
+                print(f"[JOB {job_id}] batch_submitted futures={len(futures)}")
 
                 # =====================================================================
                 # IDENTIFIER: BATCH_COLLECTION_CANCELLATION_RESPONSIVE_START
