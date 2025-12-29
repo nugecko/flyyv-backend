@@ -3702,7 +3702,107 @@ def user_sync(payload: UserSyncPayload):
         raise
     finally:
         db.close()
+from fastapi import Request
 
+@app.post("/base44/user-webhook")
+async def base44_user_webhook(request: Request, x_webhook_secret: str = Header(None, alias="X-Webhook-Secret")):
+    # Basic shared-secret auth
+    expected = os.getenv("BASE44_WEBHOOK_SECRET")
+    if expected and x_webhook_secret != expected:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    payload = await request.json()
+
+    # Base44 payload shapes can vary, support a few common ones
+    user_obj = None
+    if isinstance(payload, dict):
+        # Possible shapes:
+        # 1) { "event": "...", "data": { "user": {...} } }
+        # 2) { "type": "...", "user": {...} }
+        # 3) { "user": {...} }
+        # 4) { ...user fields directly... }
+        if isinstance(payload.get("data"), dict) and isinstance(payload["data"].get("user"), dict):
+            user_obj = payload["data"]["user"]
+        elif isinstance(payload.get("user"), dict):
+            user_obj = payload["user"]
+        else:
+            user_obj = payload
+
+    if not isinstance(user_obj, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    external_id = user_obj.get("id") or user_obj.get("external_id") or user_obj.get("user_id")
+    email = (user_obj.get("email") or "").strip().lower()
+
+    if not external_id or not email:
+        raise HTTPException(status_code=400, detail="Missing id or email")
+
+    first_name = user_obj.get("first_name")
+    last_name = user_obj.get("last_name")
+    full_name = user_obj.get("full_name") or user_obj.get("name")
+    if full_name and (not first_name and not last_name):
+        parts = str(full_name).strip().split()
+        if parts:
+            first_name = parts[0]
+            last_name = " ".join(parts[1:]) if len(parts) > 1 else None
+
+    plan_tier_code = (user_obj.get("plan_tier_code") or "free").strip().lower()
+
+    # Plan defaults: single source of truth
+    PLAN_DEFAULTS = {
+        "free": {"plan_tier": "free", "plan_active_alert_limit": 1, "plan_max_departure_window_days": 7, "plan_checks_per_day": 3},
+        "gold": {"plan_tier": "gold", "plan_active_alert_limit": 3, "plan_max_departure_window_days": 14, "plan_checks_per_day": 6},
+        "platinum": {"plan_tier": "platinum", "plan_active_alert_limit": 10, "plan_max_departure_window_days": 30, "plan_checks_per_day": 12},
+        "tester": {"plan_tier": "tester", "plan_active_alert_limit": 10_000, "plan_max_departure_window_days": 365, "plan_checks_per_day": 10_000},
+        "admin": {"plan_tier": "admin", "plan_active_alert_limit": 10_000, "plan_max_departure_window_days": 365, "plan_checks_per_day": 10_000},
+    }
+
+    defaults = PLAN_DEFAULTS.get(plan_tier_code, PLAN_DEFAULTS["free"])
+
+    db = SessionLocal()
+    try:
+        user = db.query(AppUser).filter(AppUser.external_id == external_id).first()
+
+        if user is None:
+            user = db.query(AppUser).filter(func.lower(AppUser.email) == email).first()
+            if user is not None:
+                user.external_id = external_id
+
+        if user is None:
+            user = AppUser(
+                external_id=external_id,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                source="base44-webhook",
+                marketing_consent=user_obj.get("marketing_consent"),
+                country=user_obj.get("country"),
+            )
+            db.add(user)
+        else:
+            user.email = email
+            user.first_name = first_name
+            user.last_name = last_name
+            user.country = user_obj.get("country") or user.country
+            if "marketing_consent" in user_obj:
+                user.marketing_consent = user_obj.get("marketing_consent")
+            user.source = "base44-webhook"
+
+        # Lock plan values from Base44
+        user.plan_tier = defaults["plan_tier"]
+        user.plan_active_alert_limit = defaults["plan_active_alert_limit"]
+        user.plan_max_departure_window_days = defaults["plan_max_departure_window_days"]
+        user.plan_checks_per_day = defaults["plan_checks_per_day"]
+
+        db.commit()
+        return {"status": "ok", "external_id": external_id, "email": email, "plan_tier": user.plan_tier}
+
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+        
 @app.get("/profile", response_model=ProfileResponse)
 def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
     wallet_balance = USER_WALLETS.get(x_user_id, 0)
