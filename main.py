@@ -3549,8 +3549,63 @@ def public_config():
     )
 
 @app.post("/user-sync")
+def user_sync(payload: UserSyncPayload):
+    db = SessionLocal()
+    canonical_external_id = None
 
-        # 2) Secondary lookup: same email, new external_id (Base44 re-issue / auth reset)
+    try:
+        # ------------------------------
+        # Canonical identity
+        # ------------------------------
+        canonical_external_id = (
+            (getattr(payload, "external_id", None) or "").strip()
+            or (getattr(payload, "id", None) or "").strip()
+            or (getattr(payload, "user_id", None) or "").strip()
+        )
+        if not canonical_external_id:
+            raise HTTPException(status_code=400, detail="Missing external_id")
+
+        # ------------------------------
+        # Plan defaults: single source of truth
+        # ------------------------------
+        FREE_DEFAULTS = {
+            "plan_tier": "free",
+            "plan_active_alert_limit": 1,
+            "plan_max_departure_window_days": 7,
+            "plan_checks_per_day": 3,
+        }
+
+        TESTER_DEFAULTS = {
+            "plan_tier": "tester",
+            "plan_active_alert_limit": 10_000,        # effectively unlimited
+            "plan_max_departure_window_days": 365,    # effectively unlimited
+            "plan_checks_per_day": 10_000,            # effectively unlimited
+        }
+
+        GOLD_DEFAULTS = {
+            "plan_tier": "gold",
+            "plan_active_alert_limit": 3,
+            "plan_max_departure_window_days": 14,
+            "plan_checks_per_day": 6,
+        }
+
+        PLATINUM_DEFAULTS = {
+            "plan_tier": "platinum",
+            "plan_active_alert_limit": 10,
+            "plan_max_departure_window_days": 30,
+            "plan_checks_per_day": 12,
+        }
+
+        ALLOWED_TIERS = {"free", "gold", "platinum", "tester", "admin"}
+
+        # 1) Primary lookup: external id
+        user = (
+            db.query(AppUser)
+            .filter(AppUser.external_id == canonical_external_id)
+            .first()
+        )
+
+        # 2) Secondary lookup: same email, new external_id
         if user is None and payload.email:
             email_norm = payload.email.strip().lower()
             user = (
@@ -3583,8 +3638,7 @@ def public_config():
             user.marketing_consent = payload.marketing_consent
             user.source = payload.source or user.source
 
-        # If Base44 sends a tier, adopt it as the user's plan_tier,
-        # except do not overwrite an existing admin in DB.
+        # Adopt tier if provided, but never overwrite admin
         if payload.plan_tier_code:
             tier_norm = payload.plan_tier_code.strip().lower()
             if tier_norm in ALLOWED_TIERS:
@@ -3595,7 +3649,6 @@ def public_config():
         if getattr(user, "plan_tier", None) in (None, ""):
             user.plan_tier = FREE_DEFAULTS["plan_tier"]
 
-        # Ensure entitlement fields exist, defaulting to Free for safety
         if getattr(user, "plan_active_alert_limit", None) is None:
             user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
 
@@ -3605,26 +3658,23 @@ def public_config():
         if getattr(user, "plan_checks_per_day", None) is None:
             user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
-        # Lock Free plan values
+        # Lock plan values
         if user.plan_tier == "free":
             user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
 
-        # Lock Gold plan values
-        if user.plan_tier == "gold":
+        elif user.plan_tier == "gold":
             user.plan_active_alert_limit = GOLD_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = GOLD_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = GOLD_DEFAULTS["plan_checks_per_day"]
 
-        # Lock Platinum plan values
-        if user.plan_tier == "platinum":
+        elif user.plan_tier == "platinum":
             user.plan_active_alert_limit = PLATINUM_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = PLATINUM_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = PLATINUM_DEFAULTS["plan_checks_per_day"]
 
-        # Lock Tester plan values (effectively unlimited)
-        if user.plan_tier == "tester":
+        elif user.plan_tier == "tester":
             user.plan_active_alert_limit = TESTER_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = TESTER_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = TESTER_DEFAULTS["plan_checks_per_day"]
@@ -3636,8 +3686,7 @@ def public_config():
     except Exception:
         db.rollback()
 
-        # If a race occurs (two syncs at once), avoid infinite retries:
-        # return the existing user if possible.
+        # If a race occurs, return the existing user if possible
         if canonical_external_id:
             existing = (
                 db.query(AppUser)
@@ -3656,7 +3705,9 @@ def public_config():
             )
             if existing is not None:
                 return {"status": "ok", "id": existing.id}
+
         raise
+
     finally:
         db.close()
 from fastapi import Request
