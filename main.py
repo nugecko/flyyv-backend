@@ -361,7 +361,6 @@ class SearchResultsResponse(BaseModel):
     limit: int
     options: List[FlightOption]
 
-
 class UserSyncPayload(BaseModel):
     external_id: str
     email: str
@@ -371,6 +370,9 @@ class UserSyncPayload(BaseModel):
     marketing_consent: Optional[bool] = None
     source: Optional[str] = None
 
+    # Base44 source-of-truth tier, expected values:
+    # free, gold, platinum, tester, admin
+    plan_tier_code: Optional[str] = None
 
 class PublicUser(BaseModel):
     id: str
@@ -3566,6 +3568,22 @@ def user_sync(payload: UserSyncPayload):
             "plan_max_departure_window_days": 365,    # effectively unlimited
             "plan_checks_per_day": 10_000,            # effectively unlimited
         }
+
+        GOLD_DEFAULTS = {
+            "plan_tier": "gold",
+            "plan_active_alert_limit": 3,
+            "plan_max_departure_window_days": 14,
+            "plan_checks_per_day": 6,
+        }
+
+        PLATINUM_DEFAULTS = {
+            "plan_tier": "platinum",
+            "plan_active_alert_limit": 10,
+            "plan_max_departure_window_days": 30,
+            "plan_checks_per_day": 12,
+        }
+
+        ALLOWED_TIERS = {"free", "gold", "platinum", "tester", "admin"}
 
         # 1) Primary lookup: identity chain
         user = (
