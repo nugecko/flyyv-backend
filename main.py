@@ -3625,6 +3625,14 @@ def user_sync(payload: UserSyncPayload):
             user.marketing_consent = payload.marketing_consent
             user.source = payload.source or user.source
 
+        # If Base44 sends a tier, adopt it as the user's plan_tier,
+        # except do not overwrite an existing admin in DB.
+        if payload.plan_tier_code:
+            tier_norm = payload.plan_tier_code.strip().lower()
+            if tier_norm in ALLOWED_TIERS:
+                if user.plan_tier != "admin":
+                    user.plan_tier = tier_norm
+
         # 5) Ensure entitlements exist, and lock plan values where required
         if getattr(user, "plan_tier", None) in (None, ""):
             user.plan_tier = FREE_DEFAULTS["plan_tier"]
@@ -3644,6 +3652,18 @@ def user_sync(payload: UserSyncPayload):
             user.plan_active_alert_limit = FREE_DEFAULTS["plan_active_alert_limit"]
             user.plan_max_departure_window_days = FREE_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = FREE_DEFAULTS["plan_checks_per_day"]
+
+        # Lock Gold plan values
+        if user.plan_tier == "gold":
+            user.plan_active_alert_limit = GOLD_DEFAULTS["plan_active_alert_limit"]
+            user.plan_max_departure_window_days = GOLD_DEFAULTS["plan_max_departure_window_days"]
+            user.plan_checks_per_day = GOLD_DEFAULTS["plan_checks_per_day"]
+
+        # Lock Platinum plan values
+        if user.plan_tier == "platinum":
+            user.plan_active_alert_limit = PLATINUM_DEFAULTS["plan_active_alert_limit"]
+            user.plan_max_departure_window_days = PLATINUM_DEFAULTS["plan_max_departure_window_days"]
+            user.plan_checks_per_day = PLATINUM_DEFAULTS["plan_checks_per_day"]
 
         # Lock Tester plan values (effectively unlimited)
         if user.plan_tier == "tester":
