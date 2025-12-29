@@ -3549,48 +3549,6 @@ def public_config():
     )
 
 @app.post("/user-sync")
-def user_sync(payload: UserSyncPayload):
-    db = SessionLocal()
-    try:
-        # ------------------------------
-        # Plan defaults: single source of truth
-        # ------------------------------
-        FREE_DEFAULTS = {
-            "plan_tier": "free",
-            "plan_active_alert_limit": 1,
-            "plan_max_departure_window_days": 7,
-            "plan_checks_per_day": 3,
-        }
-
-        TESTER_DEFAULTS = {
-            "plan_tier": "tester",
-            "plan_active_alert_limit": 10_000,        # effectively unlimited
-            "plan_max_departure_window_days": 365,    # effectively unlimited
-            "plan_checks_per_day": 10_000,            # effectively unlimited
-        }
-
-        GOLD_DEFAULTS = {
-            "plan_tier": "gold",
-            "plan_active_alert_limit": 3,
-            "plan_max_departure_window_days": 14,
-            "plan_checks_per_day": 6,
-        }
-
-        PLATINUM_DEFAULTS = {
-            "plan_tier": "platinum",
-            "plan_active_alert_limit": 10,
-            "plan_max_departure_window_days": 30,
-            "plan_checks_per_day": 12,
-        }
-
-        ALLOWED_TIERS = {"free", "gold", "platinum", "tester", "admin"}
-
-        # 1) Primary lookup: identity chain
-        user = (
-            db.query(AppUser)
-            .filter(AppUser.external_id == payload.external_id)
-            .first()
-        )
 
         # 2) Secondary lookup: same email, new external_id (Base44 re-issue / auth reset)
         if user is None and payload.email:
@@ -3601,12 +3559,12 @@ def user_sync(payload: UserSyncPayload):
                 .first()
             )
             if user is not None:
-                user.external_id = payload.external_id
+                user.external_id = canonical_external_id
 
         if user is None:
             # 3) Create only if neither external_id nor email exists
             user = AppUser(
-                external_id=payload.external_id,
+                external_id=canonical_external_id,
                 email=(payload.email.strip().lower() if payload.email else None),
                 first_name=payload.first_name,
                 last_name=payload.last_name,
@@ -3680,10 +3638,10 @@ def user_sync(payload: UserSyncPayload):
 
         # If a race occurs (two syncs at once), avoid infinite retries:
         # return the existing user if possible.
-        if payload.external_id:
+        if canonical_external_id:
             existing = (
                 db.query(AppUser)
-                .filter(AppUser.external_id == payload.external_id)
+                .filter(AppUser.external_id == canonical_external_id)
                 .first()
             )
             if existing is not None:
@@ -3698,7 +3656,6 @@ def user_sync(payload: UserSyncPayload):
             )
             if existing is not None:
                 return {"status": "ok", "id": existing.id}
-
         raise
     finally:
         db.close()
