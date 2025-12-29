@@ -362,8 +362,12 @@ class SearchResultsResponse(BaseModel):
     options: List[FlightOption]
 
 class UserSyncPayload(BaseModel):
-    external_id: str
-    email: str
+    # Identity: accept any of these, canonicalised in /user-sync
+    external_id: Optional[str] = None
+    id: Optional[str] = None
+    user_id: Optional[str] = None
+
+    email: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     country: Optional[str] = None
