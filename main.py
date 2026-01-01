@@ -1940,6 +1940,12 @@ def run_search_job(job_id: str):
                             job.processed_pairs += 1
                             job.updated_at = datetime.utcnow()
                             JOBS[job_id] = job
+                        
+                        # NEW: Update job timestamp even if no futures completed this iteration
+                        # This lets status endpoint detect "stuck" progress
+                        if not done:
+                            job.updated_at = datetime.utcnow()
+                            JOBS[job_id] = job
 
                             try:
                                 batch_mapped = future.result()
