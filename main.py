@@ -1712,9 +1712,7 @@ def process_date_pair_offers(
         print(f"[pair_worker] Duffel error dep={dep} ret={ret}: {e}")
         return []
 
-    print(f"[pair_worker] dep={dep} ret={ret} duffel_returned={len(offers_json)} offers")
     if not offers_json:
-        print(f"[pair_worker] ZERO offers from Duffel for {dep} -> {ret}")
         return []
 
     mapped: List[FlightOption] = [
@@ -1730,6 +1728,9 @@ def process_date_pair_offers(
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
 # =====================================================================
 
+# =====================================================================
+# SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
+# =====================================================================
 def run_search_job(job_id: str):
     """
     Async job runner:
@@ -1738,6 +1739,9 @@ def run_search_job(job_id: str):
       - Applies per-pair curation (max 20, direct quota, per-pair airline cap)
       - Merges curated results into global results with global caps
     """
+    # =====================================================================
+    # INITIALIZATION: Retrieve job and validate status
+    # =====================================================================
     job = JOBS.get(job_id)
     if not job:
         print(f"[JOB {job_id}] Job not found in memory")
@@ -1756,6 +1760,9 @@ def run_search_job(job_id: str):
         JOB_RESULTS[job_id] = []
 
     try:
+        # =====================================================================
+        # CONFIGURATION: Get caps and generate date pairs
+        # =====================================================================
         max_pairs, max_offers_pair, max_offers_total = effective_caps(job.params)
         date_pairs = generate_date_pairs(job.params, max_pairs=max_pairs)
         total_pairs = len(date_pairs)
@@ -1857,13 +1864,15 @@ def run_search_job(job_id: str):
                 counts[a] = counts.get(a, 0) + 1
             return picked
 
-        # ===== IDENTIFIER: EXECUTOR_START =====
+        # =====================================================================
+        # BATCH EXECUTION: Process date pairs in parallel batches
+        # =====================================================================
         executor = ThreadPoolExecutor(max_workers=parallel_workers)
         cancelled = False
 
         try:
             for batch_start in range(0, total_pairs, parallel_workers):
-                # ===== IDENTIFIER: CANCEL_CHECK_PRE_SUBMIT =====
+                # Check for cancellation before submitting batch
                 if JOBS.get(job_id) and JOBS[job_id].status == JobStatus.CANCELLED:
                     print(f"[JOB {job_id}] Cancelled, stopping before batch_submit")
                     cancelled = True
@@ -1873,6 +1882,7 @@ def run_search_job(job_id: str):
                     print(f"[JOB {job_id}] Reached max_offers_total before batch, stopping")
                     break
 
+                # Submit batch of futures to executor
                 batch_pairs = date_pairs[batch_start : batch_start + parallel_workers]
                 print(f"[JOB {job_id}] batch_submit start={batch_start} batch_size={len(batch_pairs)}")
 
@@ -1932,20 +1942,24 @@ def run_search_job(job_id: str):
                         if elapsed > batch_timeout_seconds:
                             raise TimeoutError(f"batch timeout after {batch_timeout_seconds}s")
 
+                        # =====================================================================
+                        # BATCH COLLECTION: Wait for futures to complete
+                        # =====================================================================
                         done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
+                        
+                        # Update timestamp even if no futures completed (smoother progress UX)
                         if not done:
+                            job.updated_at = datetime.utcnow()
+                            JOBS[job_id] = job
                             continue
 
+                        # =====================================================================
+                        # PROCESS COMPLETED FUTURES: Filter, curate, and merge results
+                        # =====================================================================
                         for future in done:
                             dep, ret = futures[future]
 
                             job.processed_pairs += 1
-                            job.updated_at = datetime.utcnow()
-                            JOBS[job_id] = job
-                        
-                        # NEW: Update job timestamp even if no futures completed this iteration
-                        # This lets status endpoint detect "stuck" progress
-                        if not done:
                             job.updated_at = datetime.utcnow()
                             JOBS[job_id] = job
 
@@ -1958,12 +1972,16 @@ def run_search_job(job_id: str):
                             if not batch_mapped:
                                 continue
 
-                            # ===== IDENTIFIER: PAIR_FILTERING =====
+                            # =====================================================================
+                            # STEP 1: APPLY FILTERS (maxPrice, stopsFilter, etc.)
+                            # =====================================================================
                             filtered_pair = apply_filters(batch_mapped, job.params)
                             if not filtered_pair:
                                 continue
 
-                            # ===== IDENTIFIER: PAIR_CURATION =====
+                            # =====================================================================
+                            # STEP 2: CURATE PAIR (balance direct vs non-direct flights)
+                            # =====================================================================
                             pair_direct = [o for o in filtered_pair if _is_direct(o)]
                             pair_non_direct = [o for o in filtered_pair if not _is_direct(o)]
 
@@ -2008,7 +2026,9 @@ def run_search_job(job_id: str):
                             except Exception as _e:
                                 print(f"[PAIR {dep} -> {ret}] curated debug failed: {_e}")
 
-                            # ===== IDENTIFIER: GLOBAL_MERGE =====
+                            # =====================================================================
+                            # STEP 3: GLOBAL MERGE (add to job results with global airline cap)
+                            # =====================================================================
                             current_results = JOB_RESULTS.get(job_id, [])
                             remaining_slots = max_offers_total - len(current_results)
                             if remaining_slots <= 0:
@@ -2061,7 +2081,9 @@ def run_search_job(job_id: str):
                 if total_count >= max_offers_total:
                     break
 
-            # ===== IDENTIFIER: CANCELLED_FINAL_STATUS =====
+            # =====================================================================
+            # CANCELLATION HANDLING: Set job to cancelled state if cancelled
+            # =====================================================================
             if cancelled:
                 job3 = JOBS.get(job_id)
                 if job3:
@@ -2071,10 +2093,14 @@ def run_search_job(job_id: str):
                 return
 
         finally:
-            # ===== IDENTIFIER: EXECUTOR_SHUTDOWN =====
+            # =====================================================================
+            # CLEANUP: Shutdown executor and cancel pending futures
+            # =====================================================================
             executor.shutdown(wait=False, cancel_futures=True)
 
-        # ===== IDENTIFIER: FINAL_RESULTS_AND_COMPLETE =====
+        # =====================================================================
+        # FINALIZATION: Apply final global caps and mark job complete
+        # =====================================================================
         final_results = JOB_RESULTS.get(job_id, [])
         final_results = apply_global_airline_cap(final_results, max_share=0.5)
         JOB_RESULTS[job_id] = final_results
@@ -2085,6 +2111,9 @@ def run_search_job(job_id: str):
         print(f"[JOB {job_id}] Completed with {len(final_results)} options")
 
     except Exception as e:
+        # =====================================================================
+        # ERROR HANDLING: Mark job as failed
+        # =====================================================================
         job.status = JobStatus.FAILED
         job.error = str(e)
         job.updated_at = datetime.utcnow()
@@ -3349,7 +3378,6 @@ def get_search_status(job_id: str, preview_limit: int = 20):
     processed_pairs = job.processed_pairs or 0
     progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
 
-    print(f"[STATUS {job_id}] proc={processed_pairs}/{total_pairs} prog={progress*100:.1f}% status={job.status}")
     return SearchStatusResponse(
         jobId=job.id,
         status=job.status,
@@ -3360,6 +3388,7 @@ def get_search_status(job_id: str, preview_limit: int = 20):
         previewCount=len(preview),
         previewOptions=preview,
     )
+
 
 @app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
