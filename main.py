@@ -351,6 +351,9 @@ class SearchStatusResponse(BaseModel):
     error: Optional[str]
     previewCount: int
     previewOptions: List[FlightOption]
+    elapsedSeconds: Optional[float] = None
+    estimatedTotalSeconds: Optional[float] = None
+    estimatedProgressPct: Optional[float] = None
 
 
 class SearchResultsResponse(BaseModel):
@@ -3355,10 +3358,13 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 # SECTION START: SEARCH STATUS AND RESULTS ROUTES
 # =====================================================================
 
+# Average seconds per date pair (based on Duffel API response times)
+ESTIMATED_SECONDS_PER_PAIR = 6.0
+
 @app.get("/search-status/{job_id}", response_model=SearchStatusResponse)
 def get_search_status(job_id: str, preview_limit: int = 20):
     job = JOBS.get(job_id)
-
+    
     if not job:
         return SearchStatusResponse(
             jobId=job_id,
@@ -3369,15 +3375,47 @@ def get_search_status(job_id: str, preview_limit: int = 20):
             error="Job not found in memory, the server likely restarted. Please start a new search.",
             previewCount=0,
             previewOptions=[],
+            elapsedSeconds=None,
+            estimatedTotalSeconds=None,
+            estimatedProgressPct=None,
         )
-
+    
     options = JOB_RESULTS.get(job_id, [])
     preview = options[:preview_limit] if preview_limit > 0 else []
-
+    
     total_pairs = job.total_pairs or 0
     processed_pairs = job.processed_pairs or 0
     progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
-
+    
+    # =====================================================================
+    # ESTIMATED PROGRESS CALCULATION
+    # =====================================================================
+    elapsed_seconds = None
+    estimated_total_seconds = None
+    estimated_progress_pct = None
+    
+    if job.status == JobStatus.RUNNING and total_pairs > 0:
+        now = datetime.utcnow()
+        elapsed_seconds = (now - job.created_at).total_seconds()
+        estimated_total_seconds = total_pairs * ESTIMATED_SECONDS_PER_PAIR
+        
+        # Time-based progress (capped at 95% to avoid showing 100% before done)
+        time_based_pct = min(95.0, (elapsed_seconds / estimated_total_seconds) * 100) if estimated_total_seconds > 0 else 0.0
+        
+        # Use the HIGHER of time-based or actual progress
+        actual_pct = progress * 100
+        estimated_progress_pct = max(time_based_pct, actual_pct)
+        
+        # Recalculate estimate based on actual performance
+        if processed_pairs > 0:
+            actual_seconds_per_pair = elapsed_seconds / processed_pairs
+            estimated_total_seconds = total_pairs * actual_seconds_per_pair
+    
+    elif job.status == JobStatus.COMPLETED:
+        elapsed_seconds = (job.updated_at - job.created_at).total_seconds() if job.updated_at else None
+        estimated_total_seconds = elapsed_seconds
+        estimated_progress_pct = 100.0
+    
     return SearchStatusResponse(
         jobId=job.id,
         status=job.status,
@@ -3387,6 +3425,9 @@ def get_search_status(job_id: str, preview_limit: int = 20):
         error=job.error,
         previewCount=len(preview),
         previewOptions=preview,
+        elapsedSeconds=round(elapsed_seconds, 1) if elapsed_seconds is not None else None,
+        estimatedTotalSeconds=round(estimated_total_seconds, 1) if estimated_total_seconds is not None else None,
+        estimatedProgressPct=round(estimated_progress_pct, 1) if estimated_progress_pct is not None else None,
     )
 
 
@@ -3402,14 +3443,11 @@ def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
             limit=limit,
             options=[],
         )
-
     options = JOB_RESULTS.get(job_id, [])
-
     offset = max(0, offset)
     limit = max(1, min(limit, 600))
     end = min(offset + limit, len(options))
     slice_ = options[offset:end]
-
     return SearchResultsResponse(
         jobId=job.id,
         status=job.status,
