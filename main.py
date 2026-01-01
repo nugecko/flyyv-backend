@@ -1481,15 +1481,11 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
     date_pairs = sorted(date_pairs, key=pair_sort_key)
 
     # -----------------------------
-    # Simple in-process cache
+    # Simple in-process cache (PER SEARCH)
     # -----------------------------
-    # This cache lives in memory inside the running container, it speeds up repeated runs.
-    # If you later want cross-container persistence, we can move it to Postgres.
-    global _DUFFEL_PAIR_CACHE  # type: ignore[name-defined]
-    try:
-        _DUFFEL_PAIR_CACHE
-    except Exception:
-        _DUFFEL_PAIR_CACHE = {}  # key -> {"ts": float, "offers": List[dict]}
+    # IMPORTANT: do NOT use a global cache for raw Duffel offers,
+    # it will grow across searches and can OOM the container.
+    _DUFFEL_PAIR_CACHE: Dict[str, Dict[str, Any]] = {}  # key -> {"ts": float, "offers": List[dict]}
 
     def _cache_key(dep: date, ret: date) -> str:
         cabin = getattr(params, "cabin", None)
