@@ -3180,53 +3180,43 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
             "message": "Missing user identity for multi-date searches. Please sign in and retry.",
         }
 
-    # ---- Per-user single-flight guard (REPLACE mode) ----
-    # If the user already has an inflight async job, cancel it and start a new one.
-    previous_job_id = None
-    if user_key:
-        with _USER_GUARD_LOCK:
-            rec = _USER_INFLIGHT.get(user_key)
-            if rec:
-                previous_job_id = rec.get("job_id")
-                print(f"[guardrail] replacing_inflight user_key={user_key} prev_job_id={previous_job_id}")
-                _USER_INFLIGHT.pop(user_key, None)
+    # ---- Per-user single-flight guard (REUSE mode) ----
+# If the user already has an inflight async job, return its jobId instead of starting a new scan.
+if user_key:
+    inflight_job_id, inflight_age = _peek_user_inflight(user_key)
 
-        if previous_job_id:
-            old = JOBS.get(previous_job_id)
-            if old and old.status in (JobStatus.PENDING, JobStatus.RUNNING):
-                old.status = JobStatus.CANCELLED
-                old.updated_at = datetime.utcnow()
-                JOBS[previous_job_id] = old
-            print(f"[guardrail] cancelled_previous user_key={user_key} job_id={previous_job_id}")
-
-        begin_ok = _begin_user_inflight(user_key, job_id=None)
-        if not begin_ok:
-            blocker_job_id, blocker_age = _peek_user_inflight(user_key)
+    if inflight_job_id:
+        j = JOBS.get(inflight_job_id)
+        if j and j.status in (JobStatus.PENDING, JobStatus.RUNNING):
             print(
-                f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
-                f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
+                f"[guardrail] reuse_inflight user_key={user_key} job_id={inflight_job_id} "
+                f"age_s={None if inflight_age is None else int(inflight_age)}"
             )
-            print(f"[guardrail] search_in_progress user_key={user_key}")
             return {
-                "status": "error",
-                "source": "search_in_progress",
-                "message": "A search is already running for this user, please wait for it to finish.",
+                "status": "ok",
+                "mode": "async",
+                "jobId": inflight_job_id,
+                "message": "Search already running, reusing existing job",
             }
 
-        print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)}")
+    begin_ok = _begin_user_inflight(user_key, job_id=None)
+    if not begin_ok:
+        blocker_job_id, blocker_age = _peek_user_inflight(user_key)
+        print(
+            f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
+            f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
+        )
+        return {
+            "status": "error",
+            "source": "search_in_progress",
+            "message": "A search is already running for this user, please wait for it to finish.",
+        }
+
+    print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)}")
 
     # ---- Global concurrency guard ----
     # ---- Global concurrency guard ----
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
-    if not acquired:
-        # If we just cancelled a previous job for this same user, give the release a moment to land.
-        # Bounded wait to avoid hanging requests.
-        if previous_job_id:
-            for _ in range(4):  # up to ~2s total
-                time.sleep(0.5)
-                acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
-                if acquired:
-                    break
 
     if not acquired:
         if user_key:
