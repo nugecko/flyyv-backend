@@ -3182,6 +3182,8 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
 
     # ---- Per-user single-flight guard (REUSE mode) ----
     # If the user already has an inflight async job, return its jobId instead of starting a new scan.
+    new_job_id = None
+
     if user_key:
         inflight_job_id, inflight_age = _peek_user_inflight(user_key)
 
@@ -3199,53 +3201,38 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
                     "message": "Search already running, reusing existing job",
                 }
 
-        begin_ok = _begin_user_inflight(user_key, job_id=None)
-        if not begin_ok:
-            blocker_job_id, blocker_age = _peek_user_inflight(user_key)
+        # Only lock inflight for multi-pair (async) searches.
+        if estimated_pairs > 1:
+            new_job_id = str(uuid4())
 
-            # Base44 sometimes double-submits instantly.
-            # If we are "inflight" but job_id is not set yet, wait briefly and return it.
-            if blocker_job_id is None:
-                for _ in range(10):  # up to ~1s total
-                    time.sleep(0.1)
-                    blocker_job_id, blocker_age = _peek_user_inflight(user_key)
-                    if blocker_job_id:
-                        break
+            begin_ok = _begin_user_inflight(user_key, job_id=new_job_id)
+            if not begin_ok:
+                blocker_job_id, blocker_age = _peek_user_inflight(user_key)
 
-            print(
-                f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
-                f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
-            )
+                print(
+                    f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
+                    f"blocker_job_id={blocker_job_id} "
+                    f"blocker_age_s={None if blocker_age is None else int(blocker_age)}"
+                )
 
-            if blocker_job_id:
-                print(f"[guardrail] returning_existing_job user_key={user_key} job_id={blocker_job_id}")
+                if blocker_job_id:
+                    print(f"[guardrail] returning_existing_job user_key={user_key} job_id={blocker_job_id}")
+                    return {
+                        "status": "ok",
+                        "mode": "async",
+                        "jobId": blocker_job_id,
+                        "message": "Search already running, returning existing job.",
+                    }
+
+                print(f"[guardrail] search_in_progress user_key={user_key}")
                 return {
-                    "status": "ok",
-                    "mode": "async",
-                    "jobId": blocker_job_id,
-                    "message": "Search already running, returning existing job.",
+                    "status": "error",
+                    "source": "search_in_progress",
+                    "message": "A search is already running for this user, please wait for it to finish.",
                 }
 
-            print(f"[guardrail] search_in_progress user_key={user_key}")
-            return {
-                "status": "error",
-                "source": "search_in_progress",
-                "message": "A search is already running for this user, please wait for it to finish.",
-            }
+            print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)} job_id={new_job_id}")
 
-            print(
-                f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
-                f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
-            )
-        return {
-            "status": "error",
-            "source": "search_in_progress",
-            "message": "A search is already running for this user, please wait for it to finish.",
-        }
-
-    print(f"[trace] request_id={request_id} begin_ok=True user_key={repr(user_key)}")
-
-    # ---- Global concurrency guard ----
     # ---- Global concurrency guard ----
     acquired = _GLOBAL_SEARCH_SEM.acquire(blocking=False)
 
@@ -3273,7 +3260,7 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
                 }
 
         # ---- Async path (multi pair) ----
-        job_id = str(uuid4())
+        job_id = new_job_id or str(uuid4())
         job = SearchJob(
             id=job_id,
             status=JobStatus.PENDING,
