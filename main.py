@@ -3270,7 +3270,13 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
                 if user_key in _USER_INFLIGHT:
                     _USER_INFLIGHT[user_key]["job_id"] = job_id
 
-            background_tasks.add_task(_run_search_job_guarded, job_id, user_key)
+                t = threading.Thread(
+                    target=_run_search_job_guarded,
+                    args=(job_id, user_key),
+                    daemon=True,
+                    name=f"search-job-{job_id[:8]}",
+                )
+                t.start()
         else:
             # This should not happen due to the guard above, but keep it safe.
             _GLOBAL_SEARCH_SEM.release()
