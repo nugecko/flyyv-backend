@@ -3181,31 +3181,31 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         }
 
     # ---- Per-user single-flight guard (REUSE mode) ----
-# If the user already has an inflight async job, return its jobId instead of starting a new scan.
-if user_key:
-    inflight_job_id, inflight_age = _peek_user_inflight(user_key)
+    # If the user already has an inflight async job, return its jobId instead of starting a new scan.
+    if user_key:
+        inflight_job_id, inflight_age = _peek_user_inflight(user_key)
 
-    if inflight_job_id:
-        j = JOBS.get(inflight_job_id)
-        if j and j.status in (JobStatus.PENDING, JobStatus.RUNNING):
+        if inflight_job_id:
+            j = JOBS.get(inflight_job_id)
+            if j and j.status in (JobStatus.PENDING, JobStatus.RUNNING):
+                print(
+                    f"[guardrail] reuse_inflight user_key={user_key} job_id={inflight_job_id} "
+                    f"age_s={None if inflight_age is None else int(inflight_age)}"
+                )
+                return {
+                    "status": "ok",
+                    "mode": "async",
+                    "jobId": inflight_job_id,
+                    "message": "Search already running, reusing existing job",
+                }
+
+        begin_ok = _begin_user_inflight(user_key, job_id=None)
+        if not begin_ok:
+            blocker_job_id, blocker_age = _peek_user_inflight(user_key)
             print(
-                f"[guardrail] reuse_inflight user_key={user_key} job_id={inflight_job_id} "
-                f"age_s={None if inflight_age is None else int(inflight_age)}"
+                f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
+                f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
             )
-            return {
-                "status": "ok",
-                "mode": "async",
-                "jobId": inflight_job_id,
-                "message": "Search already running, reusing existing job",
-            }
-
-    begin_ok = _begin_user_inflight(user_key, job_id=None)
-    if not begin_ok:
-        blocker_job_id, blocker_age = _peek_user_inflight(user_key)
-        print(
-            f"[trace] request_id={request_id} begin_ok=False user_key={repr(user_key)} "
-            f"blocker_job_id={blocker_job_id} blocker_age_s={None if blocker_age is None else int(blocker_age)}"
-        )
         return {
             "status": "error",
             "source": "search_in_progress",
