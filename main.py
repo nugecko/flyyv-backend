@@ -1712,7 +1712,9 @@ def process_date_pair_offers(
         print(f"[pair_worker] Duffel error dep={dep} ret={ret}: {e}")
         return []
 
+    print(f"[pair_worker] dep={dep} ret={ret} duffel_returned={len(offers_json)} offers")
     if not offers_json:
+        print(f"[pair_worker] ZERO offers from Duffel for {dep} -> {ret}")
         return []
 
     mapped: List[FlightOption] = [
