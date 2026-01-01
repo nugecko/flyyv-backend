@@ -3341,6 +3341,7 @@ def get_search_status(job_id: str, preview_limit: int = 20):
     processed_pairs = job.processed_pairs or 0
     progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
 
+    print(f"[STATUS {job_id}] proc={processed_pairs}/{total_pairs} prog={progress*100:.1f}% status={job.status}")
     return SearchStatusResponse(
         jobId=job.id,
         status=job.status,
@@ -3351,7 +3352,6 @@ def get_search_status(job_id: str, preview_limit: int = 20):
         previewCount=len(preview),
         previewOptions=preview,
     )
-
 
 @app.get("/search-results/{job_id}", response_model=SearchResultsResponse)
 def get_search_results(job_id: str, offset: int = 0, limit: int = 50):
