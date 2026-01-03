@@ -3385,6 +3385,7 @@ def get_search_status(job_id: str, preview_limit: int = 20):
     
     total_pairs = job.total_pairs or 0
     processed_pairs = job.processed_pairs or 0
+    print(f"[status] job_id={job_id[:8]} status={job.status} processed={processed_pairs}/{total_pairs}")
     progress = float(processed_pairs) / float(total_pairs) if total_pairs > 0 else 0.0
     
     # =====================================================================
