@@ -640,6 +640,18 @@ def iso8601_duration(minutes: int) -> str:
         return f"PT{hours}H"
     return f"PT{mins}M"
 
+def parse_iso8601_duration(duration_str: Optional[str]) -> Optional[int]:
+    """Parse ISO 8601 duration string (e.g., 'PT9H30M') to minutes."""
+    if not duration_str:
+        return None
+    import re
+    match = re.match(r'^PT(?:(\d+)H)?(?:(\d+)M)?$', duration_str)
+    if not match:
+        return None
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    return hours * 60 + minutes
+
 CABIN_RANK = {
     "ECONOMY": 1,
     "PREMIUM_ECONOMY": 2,
@@ -982,12 +994,8 @@ def map_duffel_offer_to_option(
             dep_dt = parse_iso(dep_at_str)
             arr_dt = parse_iso(arr_at_str)
 
-            duration_minutes_seg: Optional[int] = None
-            if dep_dt and arr_dt:
-                try:
-                    duration_minutes_seg = int((arr_dt - dep_dt).total_seconds() // 60)
-                except Exception:
-                    duration_minutes_seg = None
+            duffel_duration = seg.get("duration")  # e.g., "PT9H30M"
+            duration_minutes_seg = parse_iso8601_duration(duffel_duration)
 
             layover_minutes_to_next: Optional[int] = None
             if idx < len(seg_list) - 1:
