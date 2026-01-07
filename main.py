@@ -3638,6 +3638,88 @@ def admin_add_credits(
 # SECTION END: ADMIN CREDITS ENDPOINT
 # =====================================================================
 
+# =====================================================================
+# SECTION START: ADMIN FORCE SYNC ENDPOINT
+# =====================================================================
+
+class AdminSyncRequest(BaseModel):
+    email: Optional[str] = None
+    external_id: Optional[str] = None
+    plan_tier_code: str  # required: free, gold, platinum, tester, admin
+
+
+@app.post("/admin/sync-user-tier")
+def admin_sync_user_tier(
+    payload: AdminSyncRequest,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    """
+    Admin-only endpoint to force-sync a user's plan tier.
+    Call this after changing a user's tier in Base44 admin panel.
+    """
+    db = SessionLocal()
+    try:
+        # 1) Auth: require admin
+        if not x_user_id:
+            raise HTTPException(status_code=401, detail="X-User-Id header required")
+        
+        admin_user = db.query(AppUser).filter(AppUser.external_id == x_user_id).first()
+        if not admin_user or admin_user.plan_tier != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        # 2) Find target user
+        if not payload.email and not payload.external_id:
+            raise HTTPException(status_code=400, detail="Must provide email or external_id")
+
+        if payload.external_id:
+            target_user = db.query(AppUser).filter(AppUser.external_id == payload.external_id).first()
+        else:
+            target_user = db.query(AppUser).filter(func.lower(AppUser.email) == payload.email.lower()).first()
+
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # 3) Plan defaults
+        PLAN_DEFAULTS = {
+            "free": {"plan_tier": "free", "plan_active_alert_limit": 1, "plan_max_departure_window_days": 7, "plan_checks_per_day": 3},
+            "gold": {"plan_tier": "gold", "plan_active_alert_limit": 3, "plan_max_departure_window_days": 14, "plan_checks_per_day": 6},
+            "platinum": {"plan_tier": "platinum", "plan_active_alert_limit": 10, "plan_max_departure_window_days": 30, "plan_checks_per_day": 12},
+            "tester": {"plan_tier": "tester", "plan_active_alert_limit": 10000, "plan_max_departure_window_days": 365, "plan_checks_per_day": 10000},
+            "admin": {"plan_tier": "admin", "plan_active_alert_limit": 10000, "plan_max_departure_window_days": 365, "plan_checks_per_day": 10000},
+        }
+
+        tier_norm = payload.plan_tier_code.strip().lower()
+        if tier_norm not in PLAN_DEFAULTS:
+            raise HTTPException(status_code=400, detail=f"Invalid tier: {tier_norm}. Must be one of: {list(PLAN_DEFAULTS.keys())}")
+
+        # 4) Apply update
+        defaults = PLAN_DEFAULTS[tier_norm]
+        target_user.plan_tier = defaults["plan_tier"]
+        target_user.plan_active_alert_limit = defaults["plan_active_alert_limit"]
+        target_user.plan_max_departure_window_days = defaults["plan_max_departure_window_days"]
+        target_user.plan_checks_per_day = defaults["plan_checks_per_day"]
+
+        db.commit()
+        db.refresh(target_user)
+
+        return {
+            "status": "ok",
+            "user": {
+                "email": target_user.email,
+                "external_id": target_user.external_id,
+                "plan_tier": target_user.plan_tier,
+                "plan_active_alert_limit": target_user.plan_active_alert_limit,
+                "plan_max_departure_window_days": target_user.plan_max_departure_window_days,
+                "plan_checks_per_day": target_user.plan_checks_per_day,
+            }
+        }
+
+    finally:
+        db.close()
+
+# =====================================================================
+# SECTION END: ADMIN FORCE SYNC ENDPOINT
+# =====================================================================
 
 # =====================================================================
 # SECTION START: PUBLIC CONFIG, USER SYNC, PROFILE
