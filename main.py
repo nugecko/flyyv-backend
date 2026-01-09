@@ -3741,6 +3741,7 @@ def public_config():
 
 @app.post("/user-sync")
 def user_sync(payload: UserSyncPayload):
+    print(f"[user-sync] payload: email={payload.email}, plan_tier_code={payload.plan_tier_code}, external_id={getattr(payload, 'external_id', None) or getattr(payload, 'id', None)}")
     db = SessionLocal()
     canonical_external_id = None
 
