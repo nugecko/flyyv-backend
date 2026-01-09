@@ -3833,9 +3833,12 @@ def user_sync(payload: UserSyncPayload):
         # Adopt tier if provided, but never overwrite admin
         if payload.plan_tier_code:
             tier_norm = payload.plan_tier_code.strip().lower()
+            print(f"[user-sync] tier_norm={tier_norm}, current_tier={user.plan_tier}, in_allowed={tier_norm in ALLOWED_TIERS}")
             if tier_norm in ALLOWED_TIERS:
                 if user.plan_tier != "admin":
+                    old_tier = user.plan_tier
                     user.plan_tier = tier_norm
+                    print(f"[user-sync] UPDATED tier: {old_tier} -> {user.plan_tier}")
 
         # 5) Ensure entitlements exist, and lock plan values where required
         if getattr(user, "plan_tier", None) in (None, ""):
