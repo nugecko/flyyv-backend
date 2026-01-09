@@ -3725,11 +3725,6 @@ def admin_sync_user_tier(
 # SECTION START: PUBLIC CONFIG, USER SYNC, PROFILE
 # =====================================================================
 
-@app.post("/user-sync")
-def user_sync(payload: UserSyncPayload):
-    print(f"[user-sync] payload: email={payload.email}, plan_tier_code={payload.plan_tier_code}, external_id={getattr(payload, 'external_id', None) or getattr(payload, 'id', None)}")
-    db = SessionLocal()
-
 @app.get("/public-config", response_model=PublicConfig)
 def public_config():
     max_window = get_config_int("MAX_DEPARTURE_WINDOW_DAYS", 60)
