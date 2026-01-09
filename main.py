@@ -3874,6 +3874,9 @@ def user_sync(payload: UserSyncPayload):
             user.plan_max_departure_window_days = TESTER_DEFAULTS["plan_max_departure_window_days"]
             user.plan_checks_per_day = TESTER_DEFAULTS["plan_checks_per_day"]
 
+        print(f"[user-sync] ABOUT TO COMMIT - tier={user.plan_tier}, limit={user.plan_active_alert_limit}")
+        db.commit()
+
         db.commit()
         print(f"[user-sync] COMMITTED - tier is now {user.plan_tier}")
         db.refresh(user)
