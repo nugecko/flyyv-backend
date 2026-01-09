@@ -3875,7 +3875,9 @@ def user_sync(payload: UserSyncPayload):
             user.plan_checks_per_day = TESTER_DEFAULTS["plan_checks_per_day"]
 
         db.commit()
+        print(f"[user-sync] COMMITTED - tier is now {user.plan_tier}")
         db.refresh(user)
+        print(f"[user-sync] AFTER REFRESH - tier is {user.plan_tier}")
         return {"status": "ok", "id": user.id}
 
     except Exception:
