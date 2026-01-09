@@ -3875,7 +3875,16 @@ def user_sync(payload: UserSyncPayload):
             user.plan_checks_per_day = TESTER_DEFAULTS["plan_checks_per_day"]
 
         print(f"[user-sync] ABOUT TO COMMIT - tier={user.plan_tier}, limit={user.plan_active_alert_limit}")
-        db.commit()
+        try:
+            db.commit()
+            print(f"[user-sync] COMMITTED - tier is now {user.plan_tier}")
+        except Exception as commit_error:
+            print(f"[user-sync] COMMIT FAILED: {commit_error}")
+            import traceback
+            print(f"[user-sync] COMMIT TRACEBACK: {traceback.format_exc()}")
+            raise
+        db.refresh(user)
+        print(f"[user-sync] AFTER REFRESH - tier is {user.plan_tier}")
 
         db.commit()
         print(f"[user-sync] COMMITTED - tier is now {user.plan_tier}")
