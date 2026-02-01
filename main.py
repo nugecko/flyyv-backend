@@ -1728,10 +1728,18 @@ def process_date_pair_offers(
         return []
 
     mapped: List[FlightOption] = [
-        map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-        for offer in offers_json
+    map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
+    for offer in offers_json
     ]
+
+    # TTN probe, returns [] for now but must log so we confirm it runs in async
+    try:
+        _ = run_ttn_scan(params)
+    except Exception as e:
+        print(f"[ttn] probe failed in async worker dep={dep} ret={ret}: {e}")
+
     return mapped
+
 # ============================================================
 # END - ASYNC DATE-PAIR WORKER (CRITICAL)
 # ============================================================
