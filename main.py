@@ -1960,17 +1960,28 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             if isinstance(recs, list):
                 rec_count = len(recs)
                 sample_printed = 0
+
                 for r0 in recs:
                     try:
                         # One-time small sample to learn TTN shape
-                        if sample_printed < 2:
-                            keys = list(r0.keys()) if isinstance(r0, dict) else []
+                        if sample_printed < 2 and isinstance(r0, dict):
+                            keys = list(r0.keys())
                             print(f"[ttn] rec.sample_keys[{sample_printed}]={keys[:25]}")
-                            if isinstance(r0, dict):
-                                print(
-                                    f"[ttn] rec.sample_prices[{sample_printed}] "
-                                    f"amount={r0.get('amount')} fare={r0.get('fare')} taxes={r0.get('taxes')} currency={r0.get('currency')}"
-                                )
+
+                            print(
+                                f"[ttn] rec.sample_prices[{sample_printed}] "
+                                f"amount={r0.get('amount')} fare={r0.get('fare')} "
+                                f"taxes={r0.get('taxes')} currency={r0.get('currency')}"
+                            )
+
+                            routes0 = r0.get("routes")
+                            routes_type = type(routes0).__name__
+                            routes_preview = str(routes0)[:600]
+                            print(
+                                f"[ttn] rec.sample_routes[{sample_printed}] "
+                                f"type={routes_type} preview={routes_preview}"
+                            )
+
                             sample_printed += 1
 
                         cur = r0.get("currency")
