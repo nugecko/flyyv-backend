@@ -1827,8 +1827,83 @@ def map_ttn_offer_to_option(
     ret_date: date,
     passengers: int,
 ) -> FlightOption:
-    raise NotImplementedError("TTN offer mapping not implemented yet")
+    """
+    Minimal TTN recommendation -> FlightOption mapping (probe mode).
+    Phase 1 goal:
+      - produce valid FlightOption objects (required fields filled)
+      - price extracted from amount[currency] (or fallback fare+taxes)
+      - do not attempt full segment parsing yet
+    """
 
+    import hashlib
+    import json as _json
+
+    cur = offer.get("currency") or "EUR"
+
+    amt = offer.get("amount")
+    amt_val = None
+    if isinstance(amt, dict):
+        amt_val = amt.get(cur)
+    else:
+        amt_val = amt
+
+    if amt_val is None:
+        fare = offer.get("fare")
+        taxes = offer.get("taxes")
+        if fare is not None and taxes is not None:
+            try:
+                amt_val = float(fare) + float(taxes)
+            except Exception:
+                amt_val = None
+
+    price = float(amt_val) if amt_val is not None else 0.0
+
+    # Build a stable-ish ID even if TTN does not expose a clean recommendation id in the payload
+    raw_id = (
+        offer.get("id")
+        or offer.get("recommendation_id")
+        or offer.get("rec_id")
+        or offer.get("uid")
+    )
+
+    if raw_id:
+        opt_id = f"ttn:{raw_id}"
+    else:
+        payload_str = _json.dumps(offer, sort_keys=True, default=str)
+        h = hashlib.md5(payload_str.encode("utf-8")).hexdigest()[:16]
+        opt_id = f"ttn:hash:{h}"
+
+    # Airline will be improved once we parse segments, for now keep non-empty
+    airline_name = offer.get("airline") or offer.get("carrier") or offer.get("validating_carrier") or "TTN"
+
+    return FlightOption(
+        id=opt_id,
+        airline=str(airline_name),
+        airlineCode=None,
+        price=price,
+        currency=str(cur),
+        departureDate=dep_date.isoformat() if hasattr(dep_date, "isoformat") else str(dep_date),
+        returnDate=ret_date.isoformat() if hasattr(ret_date, "isoformat") else str(ret_date),
+        stops=0,
+        cabinSummary=None,
+        cabinHighest=None,
+        cabinByDirection=None,
+        durationMinutes=0,
+        totalDurationMinutes=None,
+        duration=None,
+        origin=None,
+        destination=None,
+        originAirport=None,
+        destinationAirport=None,
+        stopoverCodes=None,
+        stopoverAirports=None,
+        outboundSegments=None,
+        returnSegments=None,
+        aircraftCodes=None,
+        aircraftNames=None,
+        bookingUrl=None,
+        url=None,
+    )
 
 def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
     print(f"[ttn] run_ttn_scan START origin={getattr(params,'origin',None)} dest={getattr(params,'destination',None)}")
@@ -1944,8 +2019,46 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         print(f"[ttn] avia/search failed: {e}")
 
     print("[ttn] run_ttn_scan END (probe only)")
-    return []
 
+    # Minimal product step: return 3 mapped options if we have recs
+    try:
+        if isinstance(res, dict) and "response" in res:
+            resp = res.get("response", {}) or {}
+            recs = resp.get("recommendations", None)
+
+            if isinstance(recs, list) and recs:
+                dep_date_obj = dep if isinstance(dep, date) else None
+                if dep_date_obj is None:
+                    # best-effort parse YYYY-MM-DD if it arrives as string
+                    try:
+                        dep_date_obj = datetime.fromisoformat(str(dep)).date()
+                    except Exception:
+                        dep_date_obj = date.today()
+
+                # Probe mode, we do not have return date yet, set same as dep for schema validity
+                ret_date_obj = dep_date_obj
+
+                mapped = []
+                for r0 in recs[:3]:
+                    try:
+                        mapped.append(
+                            map_ttn_offer_to_option(
+                                r0,
+                                dep_date=dep_date_obj,
+                                ret_date=ret_date_obj,
+                                passengers=pax,
+                            )
+                        )
+                    except Exception as e:
+                        print(f"[ttn] map failed: {e}")
+                        continue
+
+                print(f"[ttn] mapped={len(mapped)} (returning up to 3 options)")
+                return mapped
+    except Exception as e:
+        print(f"[ttn] return-mapping block failed: {e}")
+
+    return []
 
 # ============================================================
 # END: TTN API HELPERS (probe-only)
