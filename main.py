@@ -1745,10 +1745,10 @@ def process_date_pair_offers(
 # ============================================================
 
 # ============================================================
-# TTN API HELPERS (scaffold)
+# TTN API HELPERS (probe-only)
 # Notes:
-# - /avia/search appears to allow GET/HEAD only (POST returns 405).
-# - TTN expects an explicit query parameter named "key".
+# - TTN expects query parameter named "key" for auth.
+# - /avia/search appears to be GET/HEAD only (POST returns 405).
 # - This block is still "probe only": it logs the response and returns [].
 # ============================================================
 
@@ -1802,7 +1802,15 @@ def ttn_post(path: str, payload: dict, params: Optional[dict] = None) -> dict:
     merged_params = dict(params or {})
     merged_params.setdefault("key", api_key)
 
-    res = requests.post(url, params=merged_params, json=payload, headers=_ttn_headers(), timeout=30)
+    print(f"[ttn] POST {path} params={merged_params} payload_keys={list((payload or {}).keys())}")
+
+    res = requests.post(
+        url,
+        params=merged_params,
+        json=payload,
+        headers=_ttn_headers(),
+        timeout=30,
+    )
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1823,29 +1831,29 @@ def map_ttn_offer_to_option(
 
 
 def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
-    print(f"[ttn] run_ttn_scan START origin={params.origin} dest={params.destination}")
+    print(f"[ttn] run_ttn_scan START origin={getattr(params,'origin',None)} dest={getattr(params,'destination',None)}")
 
     # TEMP: probe with a single departure date only
     dep = getattr(params, "earliestDeparture", None) or getattr(params, "departure_date", None)
 
     if not dep or not getattr(params, "origin", None) or not getattr(params, "destination", None):
-        print("[ttn] missing required params, skipping TTN scan")
+        print("[ttn] missing required params (origin/destination/dep), skipping TTN scan")
         return []
 
     dep_str = dep.isoformat() if hasattr(dep, "isoformat") else str(dep)
 
-    # IMPORTANT: /avia/search is GET-only (POST returns 405), so use query params.
     qs = {
+        # Route fields: we still need TTN's exact naming, this is just a first probe
         "from": params.origin,
         "to": params.destination,
         "date": dep_str,
         "adults": int(getattr(params, "passengers", 1) or 1),
+        # cabin: keep as-is for now, we will adjust once TTN tells us expected values
         "cabinClass": (getattr(params, "cabin", None) or "BUSINESS").lower(),
         "currency": "USD",
     }
 
     try:
-        print(f"[ttn] avia/search params={params_qs}")
         res = ttn_get("/avia/search", params=qs)
 
         if isinstance(res, dict):
@@ -1862,7 +1870,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
 
 
 # ============================================================
-# END: TTN API HELPERS (scaffold)
+# END: TTN API HELPERS (probe-only)
 # ============================================================
 
 # =====================================================================
