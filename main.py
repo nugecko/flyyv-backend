@@ -1746,8 +1746,8 @@ def process_date_pair_offers(
 # TTN API HELPERS (probe-only)
 # Notes:
 # - TTN expects query parameter named "key" for auth.
-# - /avia/search appears to be GET/HEAD only (POST returns 405).
-# - This block is still "probe only": it logs the response and returns [].
+# - /avia/search is GET-only, use /avia/search.json to get JSON.
+# - For now: probe mode plus minimal mapping, returns up to 3 FlightOptions.
 # ============================================================
 
 TTN_BASE_URL = "https://v2.api.tickets.ua"
@@ -1829,22 +1829,26 @@ def map_ttn_offer_to_option(
 ) -> FlightOption:
     """
     Minimal TTN recommendation -> FlightOption mapping (probe mode).
+
     Phase 1 goal:
       - produce valid FlightOption objects (required fields filled)
       - price extracted from amount[currency] (or fallback fare+taxes)
-      - do not attempt full segment parsing yet
+      - basic stops and duration from routes if present
+      - do not attempt full segment mapping yet
     """
-
     import hashlib
     import json as _json
+
+    if not isinstance(offer, dict):
+        raise ValueError("TTN offer is not a dict")
 
     cur = offer.get("currency") or "EUR"
 
     amt = offer.get("amount")
     amt_val = None
-    if isinstance(amt, dict):
+    if isinstance(amt, dict) and cur:
         amt_val = amt.get(cur)
-    else:
+    elif amt is not None:
         amt_val = amt
 
     if amt_val is None:
@@ -1858,14 +1862,7 @@ def map_ttn_offer_to_option(
 
     price = float(amt_val) if amt_val is not None else 0.0
 
-    # Build a stable-ish ID even if TTN does not expose a clean recommendation id in the payload
-    raw_id = (
-        offer.get("id")
-        or offer.get("recommendation_id")
-        or offer.get("rec_id")
-        or offer.get("uid")
-    )
-
+    raw_id = offer.get("id") or offer.get("recommendation_id") or offer.get("rec_id") or offer.get("uid")
     if raw_id:
         opt_id = f"ttn:{raw_id}"
     else:
@@ -1873,8 +1870,30 @@ def map_ttn_offer_to_option(
         h = hashlib.md5(payload_str.encode("utf-8")).hexdigest()[:16]
         opt_id = f"ttn:hash:{h}"
 
-    # Airline will be improved once we parse segments, for now keep non-empty
-    airline_name = offer.get("airline") or offer.get("carrier") or offer.get("validating_carrier") or "TTN"
+    # Derive some basics from routes if present
+    stops = 0
+    duration_minutes = 0
+
+    routes = offer.get("routes")
+    if isinstance(routes, list) and routes:
+        try:
+            # route_index 0 is outbound in their structure
+            r0 = routes[0] if isinstance(routes[0], dict) else None
+            if r0:
+                duration_minutes = int(r0.get("route_duration") or 0) or 0
+                segs = r0.get("segments")
+                if isinstance(segs, list):
+                    stops = max(0, len(segs) - 1)
+        except Exception:
+            pass
+
+    airline_name = (
+        offer.get("airline")
+        or offer.get("carrier")
+        or offer.get("validating_carrier")
+        or offer.get("validating_supplier")
+        or "TTN"
+    )
 
     return FlightOption(
         id=opt_id,
@@ -1882,19 +1901,19 @@ def map_ttn_offer_to_option(
         airlineCode=None,
         price=price,
         currency=str(cur),
-        departureDate=dep_date.isoformat() if hasattr(dep_date, "isoformat") else str(dep_date),
-        returnDate=ret_date.isoformat() if hasattr(ret_date, "isoformat") else str(ret_date),
-        stops=0,
+        departureDate=dep_date.isoformat(),
+        returnDate=ret_date.isoformat(),
+        stops=int(stops),
         cabinSummary=None,
         cabinHighest=None,
         cabinByDirection=None,
-        durationMinutes=0,
+        durationMinutes=int(duration_minutes) if duration_minutes else 0,
         totalDurationMinutes=None,
         duration=None,
-        origin=origin,
-        destination=destination,
-        originAirport=origin,
-        destinationAirport=destination,
+        origin=str(origin),
+        destination=str(destination),
+        originAirport=str(origin),
+        destinationAirport=str(destination),
         stopoverCodes=None,
         stopoverAirports=None,
         outboundSegments=None,
@@ -1904,6 +1923,7 @@ def map_ttn_offer_to_option(
         bookingUrl=None,
         url=None,
     )
+
 
 def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
     print(f"[ttn] run_ttn_scan START origin={getattr(params,'origin',None)} dest={getattr(params,'destination',None)}")
@@ -1915,7 +1935,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         print("[ttn] missing required params (origin/destination/dep), skipping TTN scan")
         return []
 
-        # TTN expects DD-MM-YYYY
+    # TTN expects DD-MM-YYYY
     if hasattr(dep, "strftime"):
         dep_str = dep.strftime("%d-%m-%Y")
     else:
@@ -1933,7 +1953,6 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         service_class = "A"
 
     qs = {
-        # TTN search schema: destinations array
         "destinations[0][departure]": params.origin,
         "destinations[0][arrival]": params.destination,
         "destinations[0][date]": dep_str,
@@ -1942,148 +1961,146 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         "lang": "en",
     }
 
-    try:
-            res = None
+    res: Optional[dict] = None
     recs = None
 
     try:
-        # Prefer JSON to avoid XML parsing and to match TTN examples
         res = ttn_get("/avia/search.json", params=qs)
 
-        if isinstance(res, dict) and "response" in res:
-            resp = res.get("response", {}) or {}
-            result = resp.get("result", {}) or {}
-            session = resp.get("session", {}) or {}
-            recs = resp.get("recommendations", None)
+        if not (isinstance(res, dict) and "response" in res):
+            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
+            print("[ttn] run_ttn_scan END (probe only)")
+            return []
 
-            # Count + cheapest price sanity check (probe only)
-            rec_count = 0
-            cheapest = None
-            cheapest_currency = None
+        resp = res.get("response", {}) or {}
+        result = resp.get("result", {}) or {}
+        session = resp.get("session", {}) or {}
+        recs = resp.get("recommendations", None)
 
-            if isinstance(recs, list):
-                rec_count = len(recs)
-                sample_printed = 0
+        rec_count = 0
+        cheapest = None
+        cheapest_currency = None
 
-                for r0 in recs:
-                    try:
-                        if not isinstance(r0, dict):
-                            continue
+        if isinstance(recs, list):
+            rec_count = len(recs)
+            sample_printed = 0
 
-                        # One-time small sample to learn TTN shape
-                        if sample_printed < 2:
-                            keys = list(r0.keys())
-                            print(f"[ttn] rec.sample_keys[{sample_printed}]={keys[:25]}")
-
-                            print(
-                                f"[ttn] rec.sample_prices[{sample_printed}] "
-                                f"amount={r0.get('amount')} fare={r0.get('fare')} "
-                                f"taxes={r0.get('taxes')} currency={r0.get('currency')}"
-                            )
-
-                            routes0 = r0.get("routes")
-                            routes_type = type(routes0).__name__
-                            routes_preview = str(routes0)[:600]
-                            print(
-                                f"[ttn] rec.sample_routes[{sample_printed}] "
-                                f"type={routes_type} preview={routes_preview}"
-                            )
-
-                            sample_printed += 1
-
-                        cur = r0.get("currency")
-
-                        # amount can be a dict like {"EUR": 1480.84, "USD": 1771.44, ...}
-                        amt = r0.get("amount")
-                        if isinstance(amt, dict) and cur:
-                            amt_val = amt.get(cur)
-                        else:
-                            amt_val = amt
-
-                        # Fallback: fare + taxes if amount missing
-                        if amt_val is None:
-                            fare = r0.get("fare")
-                            taxes = r0.get("taxes")
-                            if fare is not None and taxes is not None:
-                                try:
-                                    amt_val = float(fare) + float(taxes)
-                                except Exception:
-                                    amt_val = None
-
-                        if amt_val is None:
-                            continue
-
-                        val = float(amt_val)
-                        if cheapest is None or val < cheapest:
-                            cheapest = val
-                            cheapest_currency = cur
-
-                    except Exception:
+            for r0 in recs:
+                try:
+                    if not isinstance(r0, dict):
                         continue
 
-            elif isinstance(recs, dict):
-                rec_count = len(recs)
+                    if sample_printed < 2:
+                        keys = list(r0.keys())
+                        print(f"[ttn] rec.sample_keys[{sample_printed}]={keys[:25]}")
+                        print(
+                            f"[ttn] rec.sample_prices[{sample_printed}] "
+                            f"amount={r0.get('amount')} fare={r0.get('fare')} "
+                            f"taxes={r0.get('taxes')} currency={r0.get('currency')}"
+                        )
 
-            print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
-            print(
-                f"[ttn] session.id={session.get('id')} recs={rec_count} "
-                f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
-            )
+                        routes0 = r0.get("routes")
+                        routes_type = type(routes0).__name__
+                        routes_preview = str(routes0)[:600]
+                        print(
+                            f"[ttn] rec.sample_routes[{sample_printed}] "
+                            f"type={routes_type} preview={routes_preview}"
+                        )
+                        sample_printed += 1
 
-        else:
-            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
+                    cur = r0.get("currency")
+                    amt = r0.get("amount")
+
+                    if isinstance(amt, dict) and cur:
+                        amt_val = amt.get(cur)
+                    else:
+                        amt_val = amt
+
+                    if amt_val is None:
+                        fare = r0.get("fare")
+                        taxes = r0.get("taxes")
+                        if fare is not None and taxes is not None:
+                            try:
+                                amt_val = float(fare) + float(taxes)
+                            except Exception:
+                                amt_val = None
+
+                    if amt_val is None:
+                        continue
+
+                    val = float(amt_val)
+                    if cheapest is None or val < cheapest:
+                        cheapest = val
+                        cheapest_currency = cur
+
+                except Exception:
+                    continue
+
+        elif isinstance(recs, dict):
+            rec_count = len(recs)
+
+        print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
+        print(
+            f"[ttn] session.id={session.get('id')} recs={rec_count} "
+            f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
+        )
 
     except Exception as e:
         print(f"[ttn] avia/search failed: {e}")
+        print("[ttn] run_ttn_scan END (probe only)")
+        return []
 
     print("[ttn] run_ttn_scan END (probe only)")
 
     # Minimal product step: return 3 mapped options if we have recs
     try:
-        if isinstance(res, dict) and "response" in res:
-            resp = res.get("response", {}) or {}
-            recs = resp.get("recommendations", None)
+        if not (isinstance(recs, list) and recs):
+            print("[ttn] mapped=0 (no recs)")
+            return []
 
-            if isinstance(recs, list) and recs:
-                dep_date_obj = dep if isinstance(dep, date) else None
-                if dep_date_obj is None:
-                    # best-effort parse YYYY-MM-DD if it arrives as string
-                    try:
-                        dep_date_obj = datetime.fromisoformat(str(dep)).date()
-                    except Exception:
-                        dep_date_obj = date.today()
+        dep_date_obj = dep if isinstance(dep, date) else None
+        if dep_date_obj is None:
+            try:
+                dep_date_obj = datetime.fromisoformat(str(dep)).date()
+            except Exception:
+                dep_date_obj = date.today()
 
-                # Probe mode, we do not have return date yet, set same as dep for schema validity
-                ret_date_obj = dep_date_obj
+        # Probe mode, we do not have return date yet, set same as dep for schema validity
+        ret_date_obj = dep_date_obj
 
-                mapped = []
-                for r0 in recs[:3]:
-                    try:
-                        mapped.append(
-                            map_ttn_offer_to_option(
-                                r0,
-                                dep_date=dep_date_obj,
-                                ret_date=ret_date_obj,
-                                passengers=pax,
-                                origin=str(params.origin),
-                                destination=str(params.destination),
-                            )
-                        )
-                    except Exception as e:
-                        print(f"[ttn] map failed: {e}")
-                        continue
-                        
-                if mapped:
-                    o0 = mapped[0]
-                    print(f"[ttn] mapped={len(mapped)} first_origin={o0.origin} first_dest={o0.destination} first_originAirport={o0.originAirport} first_destAirport={o0.destinationAirport}")
-                else:
-                    print(f"[ttn] mapped=0")
-                return mapped
+        mapped: List[FlightOption] = []
+        for r0 in recs[:3]:
+            try:
+                mapped.append(
+                    map_ttn_offer_to_option(
+                        r0,
+                        dep_date=dep_date_obj,
+                        ret_date=ret_date_obj,
+                        passengers=pax,
+                        origin=str(params.origin),
+                        destination=str(params.destination),
+                    )
+                )
+            except Exception as e:
+                print(f"[ttn] map failed: {e}")
+                continue
+
+        if mapped:
+            o0 = mapped[0]
+            print(
+                f"[ttn] mapped={len(mapped)} "
+                f"first_origin={o0.origin} first_dest={o0.destination} "
+                f"first_originAirport={o0.originAirport} first_destAirport={o0.destinationAirport}"
+            )
+        else:
+            print("[ttn] mapped=0")
+
+        return mapped
 
     except Exception as e:
         print(f"[ttn] return-mapping block failed: {e}")
+        return []
 
-    return []
 
 # ============================================================
 # END: TTN API HELPERS (probe-only)
