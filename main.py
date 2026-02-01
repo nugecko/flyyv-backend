@@ -3391,7 +3391,9 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         # ---- Sync path (single pair) ----
         if estimated_pairs <= 1:
             with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS, job_id=None):
-                options = run_duffel_scan(params)
+                options = []
+                options += run_duffel_scan(params)
+                options += run_ttn_scan(params)
                 options = apply_global_airline_cap(options, max_share=0.5)
                 return {
                     "status": "ok",
