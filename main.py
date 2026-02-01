@@ -1812,7 +1812,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             {
                 "from": params.origin,
                 "to": params.destination,
-                "date": dep,
+                "date": dep.isoformat() if hasattr(dep, "isoformat") else str(dep),
             }
         ],
         "passengers": {
