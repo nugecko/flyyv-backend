@@ -1898,19 +1898,33 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
                                 )
                             sample_printed += 1
 
-                        # Try amount, then fare
-                        amt = r0.get("amount")
                         cur = r0.get("currency")
-                        if amt is None:
-                            amt = r0.get("fare")
 
-                        if amt is None:
+                        # amount can be a dict like {"EUR": 1480.84, "USD": 1771.44, ...}
+                        amt = r0.get("amount")
+                        if isinstance(amt, dict) and cur:
+                            amt_val = amt.get(cur)
+                        else:
+                            amt_val = amt
+
+                        # Fallback: fare + taxes if amount missing
+                        if amt_val is None:
+                            fare = r0.get("fare")
+                            taxes = r0.get("taxes")
+                            if fare is not None and taxes is not None:
+                                try:
+                                    amt_val = float(fare) + float(taxes)
+                                except Exception:
+                                    amt_val = None
+
+                        if amt_val is None:
                             continue
 
-                        val = float(amt)
+                        val = float(amt_val)
                         if cheapest is None or val < cheapest:
                             cheapest = val
                             cheapest_currency = cur
+
                     except Exception:
                         continue
 
