@@ -1693,55 +1693,31 @@ def process_date_pair_offers(
 ) -> List[FlightOption]:
     """
     TTN-only worker:
-      - For this (dep, ret) pair, call TTN (probe-mode scan using dep as departure)
-      - Stamp returned FlightOptions with the real dep/ret for this pair
-      - Return up to max_offers_pair (but TTN probe currently maps up to 3)
+    - Fetch offers for exactly one (dep, ret) pair from TTN
+    - Map to FlightOption
+    - Apply per-pair cap
     """
-
-    per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
-    per_pair_limit = max(1, min(per_pair_limit, 100))
-
-    # Make a per-pair copy of params so TTN uses this dep date
     try:
-        scan_params = params.model_copy(deep=True)
-    except Exception:
-        try:
-            scan_params = params.copy(deep=True)  # older pydantic
-        except Exception:
-            scan_params = SearchParams(**(params.dict() if hasattr(params, "dict") else dict(params)))
+        per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
+        per_pair_limit = max(1, min(per_pair_limit, 50))  # TTN can be heavy, keep sane
 
-    # Force TTN scan to use this departure date (probe mode uses earliestDeparture)
-    try:
-        scan_params.earliestDeparture = dep
-        scan_params.latestDeparture = dep
-    except Exception:
-        pass
+        # Create a copy of params with the pair-specific departure date
+        # (SearchParams is pydantic, but keep compatibility across versions)
+        if hasattr(params, "model_copy"):
+            pair_params = params.model_copy(update={"earliestDeparture": dep})
+        elif hasattr(params, "copy"):
+            pair_params = params.copy(update={"earliestDeparture": dep})
+        else:
+            pair_params = params
 
-    try:
-        ttn_opts = run_ttn_scan(scan_params) or []
+        results = run_ttn_scan(pair_params, dep_override=dep, ret_override=ret) or []
+        if results:
+            return results[:per_pair_limit]
+        return []
+
     except Exception as e:
         print(f"[pair_worker] TTN error dep={dep} ret={ret}: {e}")
         return []
-
-    if not ttn_opts:
-        return []
-
-    # Stamp the real dep/ret for this pair so Flyyv UI + processing remains correct
-    dep_iso = dep.isoformat()
-    ret_iso = ret.isoformat()
-
-    for o in ttn_opts:
-        try:
-            o.departureDate = dep_iso
-            o.returnDate = ret_iso
-            o.origin = str(params.origin)
-            o.destination = str(params.destination)
-            o.originAirport = str(params.origin)
-            o.destinationAirport = str(params.destination)
-        except Exception:
-            pass
-
-    return ttn_opts[:per_pair_limit]
 
 # ============================================================
 # END - ASYNC DATE-PAIR WORKER (CRITICAL)
@@ -1930,11 +1906,15 @@ def map_ttn_offer_to_option(
     )
 
 
-def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
+def run_ttn_scan(
+    params: SearchParams,
+    dep_override: Optional[date] = None,
+    ret_override: Optional[date] = None,
+) -> List[FlightOption]:
     print(f"[ttn] run_ttn_scan START origin={getattr(params,'origin',None)} dest={getattr(params,'destination',None)}")
 
-    # TEMP: probe with a single departure date only
-    dep = getattr(params, "earliestDeparture", None) or getattr(params, "departure_date", None)
+    # Use override when called from date-pair worker, otherwise fall back to params
+    dep = dep_override or getattr(params, "earliestDeparture", None) or getattr(params, "departure_date", None)
 
     if not dep or not getattr(params, "origin", None) or not getattr(params, "destination", None):
         print("[ttn] missing required params (origin/destination/dep), skipping TTN scan")
@@ -1966,32 +1946,28 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         "lang": "en",
     }
 
-    res: Optional[dict] = None
+    res = None
     recs = None
 
     try:
         res = ttn_get("/avia/search.json", params=qs)
 
-        if not (isinstance(res, dict) and "response" in res):
-            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
-            print("[ttn] run_ttn_scan END (probe only)")
-            return []
+        if isinstance(res, dict) and "response" in res:
+            resp = res.get("response", {}) or {}
+            result = resp.get("result", {}) or {}
+            session = resp.get("session", {}) or {}
+            recs = resp.get("recommendations", None)
 
-        resp = res.get("response", {}) or {}
-        result = resp.get("result", {}) or {}
-        session = resp.get("session", {}) or {}
-        recs = resp.get("recommendations", None)
+            rec_count = 0
+            cheapest = None
+            cheapest_currency = None
 
-        rec_count = 0
-        cheapest = None
-        cheapest_currency = None
+            if isinstance(recs, list):
+                rec_count = len(recs)
 
-        if isinstance(recs, list):
-            rec_count = len(recs)
-            sample_printed = 0
-
-            for r0 in recs:
-                try:
+                # Small sample logs, only for the first 2 items
+                sample_printed = 0
+                for r0 in recs:
                     if not isinstance(r0, dict):
                         continue
 
@@ -2003,19 +1979,15 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
                             f"amount={r0.get('amount')} fare={r0.get('fare')} "
                             f"taxes={r0.get('taxes')} currency={r0.get('currency')}"
                         )
-
                         routes0 = r0.get("routes")
-                        routes_type = type(routes0).__name__
-                        routes_preview = str(routes0)[:600]
                         print(
                             f"[ttn] rec.sample_routes[{sample_printed}] "
-                            f"type={routes_type} preview={routes_preview}"
+                            f"type={type(routes0).__name__} preview={str(routes0)[:600]}"
                         )
                         sample_printed += 1
 
                     cur = r0.get("currency")
                     amt = r0.get("amount")
-
                     if isinstance(amt, dict) and cur:
                         amt_val = amt.get(cur)
                     else:
@@ -2033,83 +2005,85 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
                     if amt_val is None:
                         continue
 
-                    val = float(amt_val)
+                    try:
+                        val = float(amt_val)
+                    except Exception:
+                        continue
+
                     if cheapest is None or val < cheapest:
                         cheapest = val
                         cheapest_currency = cur
 
-                except Exception:
-                    continue
+            elif isinstance(recs, dict):
+                rec_count = len(recs)
 
-        elif isinstance(recs, dict):
-            rec_count = len(recs)
-
-        print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
-        print(
-            f"[ttn] session.id={session.get('id')} recs={rec_count} "
-            f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
-        )
+            print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
+            print(
+                f"[ttn] session.id={session.get('id')} recs={rec_count} "
+                f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
+            )
+        else:
+            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
 
     except Exception as e:
         print(f"[ttn] avia/search failed: {e}")
-        print("[ttn] run_ttn_scan END (probe only)")
-        return []
 
-    print("[ttn] run_ttn_scan END (probe only)")
+    print("[ttn] run_ttn_scan END")
 
-    # Minimal product step: return 3 mapped options if we have recs
+    # Return up to 3 mapped options (probe mode still, but with correct dep/ret)
     try:
-        if not (isinstance(recs, list) and recs):
-            print("[ttn] mapped=0 (no recs)")
-            return []
+        if isinstance(res, dict) and "response" in res:
+            resp = res.get("response", {}) or {}
+            recs = resp.get("recommendations", None)
 
-        dep_date_obj = dep if isinstance(dep, date) else None
-        if dep_date_obj is None:
-            try:
-                dep_date_obj = datetime.fromisoformat(str(dep)).date()
-            except Exception:
-                dep_date_obj = date.today()
+            if isinstance(recs, list) and recs:
+                dep_date_obj = dep if isinstance(dep, date) else None
+                if dep_date_obj is None:
+                    try:
+                        dep_date_obj = datetime.fromisoformat(str(dep)).date()
+                    except Exception:
+                        dep_date_obj = date.today()
 
-        # Probe mode, we do not have return date yet, set same as dep for schema validity
-        ret_date_obj = dep_date_obj
+                if ret_override and isinstance(ret_override, date):
+                    ret_date_obj = ret_override
+                else:
+                    ret_date_obj = dep_date_obj
 
-        mapped: List[FlightOption] = []
-        for r0 in recs[:3]:
-            try:
-                mapped.append(
-                    map_ttn_offer_to_option(
-                        r0,
-                        dep_date=dep_date_obj,
-                        ret_date=ret_date_obj,
-                        passengers=pax,
-                        origin=str(params.origin),
-                        destination=str(params.destination),
+                mapped = []
+                for r0 in recs[:3]:
+                    if not isinstance(r0, dict):
+                        continue
+                    try:
+                        mapped.append(
+                            map_ttn_offer_to_option(
+                                r0,
+                                dep_date=dep_date_obj,
+                                ret_date=ret_date_obj,
+                                passengers=pax,
+                                origin=str(params.origin),
+                                destination=str(params.destination),
+                            )
+                        )
+                    except Exception as e:
+                        print(f"[ttn] map failed: {e}")
+                        continue
+
+                if mapped:
+                    o0 = mapped[0]
+                    print(
+                        f"[ttn] mapped={len(mapped)} "
+                        f"first_origin={getattr(o0,'origin',None)} first_dest={getattr(o0,'destination',None)} "
+                        f"first_originAirport={getattr(o0,'originAirport',None)} first_destAirport={getattr(o0,'destinationAirport',None)}"
                     )
-                )
-            except Exception as e:
-                print(f"[ttn] map failed: {e}")
-                continue
+                else:
+                    print("[ttn] mapped=0")
 
-        if mapped:
-            o0 = mapped[0]
-            print(
-                f"[ttn] mapped={len(mapped)} "
-                f"first_origin={o0.origin} first_dest={o0.destination} "
-                f"first_originAirport={o0.originAirport} first_destAirport={o0.destinationAirport}"
-            )
-        else:
-            print("[ttn] mapped=0")
-
-        return mapped
+                return mapped
 
     except Exception as e:
         print(f"[ttn] return-mapping block failed: {e}")
-        return []
 
-
-# ============================================================
-# END: TTN API HELPERS (probe-only)
-# ============================================================
+    return []
 
 # =====================================================================
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
