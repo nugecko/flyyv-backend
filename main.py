@@ -1957,7 +1957,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             cheapest = None
             cheapest_currency = None
 
-            try:
+        try:
         # Prefer JSON to avoid XML parsing and to match TTN examples
         res = ttn_get("/avia/search.json", params=qs)
 
@@ -2101,6 +2101,10 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         print(f"[ttn] return-mapping block failed: {e}")
 
     return []
+
+# ============================================================
+# END: TTN API HELPERS (probe-only)
+# ============================================================
 
 # ============================================================
 # END: TTN API HELPERS (probe-only)
