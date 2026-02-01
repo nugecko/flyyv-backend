@@ -1840,27 +1840,55 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
         print("[ttn] missing required params (origin/destination/dep), skipping TTN scan")
         return []
 
-    dep_str = dep.isoformat() if hasattr(dep, "isoformat") else str(dep)
+        # TTN expects DD-MM-YYYY
+    if hasattr(dep, "strftime"):
+        dep_str = dep.strftime("%d-%m-%Y")
+    else:
+        dep_str = str(dep)
+
+    pax = int(getattr(params, "passengers", 1) or 1)
+
+    # Map Flyyv cabin to TTN service_class: A=all, E=economy, B=business
+    cabin_raw = (getattr(params, "cabin", None) or "BUSINESS").upper()
+    if cabin_raw in ("BUSINESS", "B"):
+        service_class = "B"
+    elif cabin_raw in ("ECONOMY", "E"):
+        service_class = "E"
+    else:
+        service_class = "A"
 
     qs = {
-        # Route fields: we still need TTN's exact naming, this is just a first probe
-        "from": params.origin,
-        "to": params.destination,
-        "date": dep_str,
-        "adults": int(getattr(params, "passengers", 1) or 1),
-        # cabin: keep as-is for now, we will adjust once TTN tells us expected values
-        "cabinClass": (getattr(params, "cabin", None) or "BUSINESS").lower(),
-        "currency": "USD",
+        # TTN search schema: destinations array
+        "destinations[0][departure]": params.origin,
+        "destinations[0][arrival]": params.destination,
+        "destinations[0][date]": dep_str,
+        "adt": pax,
+        "service_class": service_class,
+        "lang": "en",
     }
 
     try:
-        res = ttn_get("/avia/search", params=qs)
+        # Prefer JSON to avoid XML parsing and to match TTN examples
+        res = ttn_get("/avia/search.json", params=qs)
 
-        if isinstance(res, dict):
-            print("[ttn] raw avia/search response keys:", list(res.keys()))
-            print("[ttn] raw avia/search response sample:", str(res)[:800])
+        if isinstance(res, dict) and "response" in res:
+            resp = res.get("response", {})
+            result = resp.get("result", {}) or {}
+            session = resp.get("session", {}) or {}
+            recs = resp.get("recommendations", None)
+
+            rec_count = None
+            if isinstance(recs, list):
+                rec_count = len(recs)
+            elif isinstance(recs, dict):
+                rec_count = len(recs)
+            elif recs is None:
+                rec_count = 0
+
+            print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
+            print(f"[ttn] session.id={session.get('id')} recs={rec_count} service_class={service_class} dep={dep_str}")
         else:
-            print("[ttn] raw avia/search response type:", type(res), "sample:", str(res)[:800])
+            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
 
     except Exception as e:
         print(f"[ttn] avia/search failed: {e}")
