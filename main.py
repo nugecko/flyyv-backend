@@ -1877,16 +1877,34 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             session = resp.get("session", {}) or {}
             recs = resp.get("recommendations", None)
 
-            rec_count = None
+            # Count + cheapest price sanity check (probe only)
+            rec_count = 0
+            cheapest = None
+            cheapest_currency = None
+
             if isinstance(recs, list):
                 rec_count = len(recs)
+                for r0 in recs:
+                    try:
+                        amt = r0.get("amount")
+                        cur = r0.get("currency")
+                        if amt is None:
+                            continue
+                        val = float(amt)
+                        if cheapest is None or val < cheapest:
+                            cheapest = val
+                            cheapest_currency = cur
+                    except Exception:
+                        continue
             elif isinstance(recs, dict):
                 rec_count = len(recs)
-            elif recs is None:
-                rec_count = 0
 
             print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
-            print(f"[ttn] session.id={session.get('id')} recs={rec_count} service_class={service_class} dep={dep_str}")
+            print(
+                f"[ttn] session.id={session.get('id')} recs={rec_count} "
+                f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
+            )
+
         else:
             print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
 
