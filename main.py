@@ -1824,6 +1824,8 @@ def map_ttn_offer_to_option(
     dep_date: date,
     ret_date: date,
     passengers: int,
+    origin: str,
+    destination: str,
 ) -> FlightOption:
     """
     Minimal TTN recommendation -> FlightOption mapping (probe mode).
@@ -1889,10 +1891,10 @@ def map_ttn_offer_to_option(
         durationMinutes=0,
         totalDurationMinutes=None,
         duration=None,
-        origin=None,
-        destination=None,
-        originAirport=None,
-        destinationAirport=None,
+        origin=origin,
+        destination=destination,
+        originAirport=origin,
+        destinationAirport=destination,
         stopoverCodes=None,
         stopoverAirports=None,
         outboundSegments=None,
@@ -2045,6 +2047,8 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
                                 dep_date=dep_date_obj,
                                 ret_date=ret_date_obj,
                                 passengers=pax,
+                                origin=str(params.origin),
+                                destination=str(params.destination),
                             )
                         )
                     except Exception as e:
