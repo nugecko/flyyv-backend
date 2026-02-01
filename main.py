@@ -1732,11 +1732,9 @@ def process_date_pair_offers(
     for offer in offers_json
     ]
 
-    # TTN probe, returns [] for now but must log so we confirm it runs in async
-    try:
-        _ = run_ttn_scan(params)
-    except Exception as e:
-        print(f"[ttn] probe failed in async worker dep={dep} ret={ret}: {e}")
+    # TTN probe disabled in async Duffel worker to avoid duplicate TTN calls and rate-limit waste.
+    # TTN should run in the primary search flow only (TTN-first or merged strategy), not per Duffel date-pair.
+    pass
 
     return mapped
 
