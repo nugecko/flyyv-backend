@@ -1884,18 +1884,36 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
 
             if isinstance(recs, list):
                 rec_count = len(recs)
+                sample_printed = 0
                 for r0 in recs:
                     try:
+                        # One-time small sample to learn TTN shape
+                        if sample_printed < 2:
+                            keys = list(r0.keys()) if isinstance(r0, dict) else []
+                            print(f"[ttn] rec.sample_keys[{sample_printed}]={keys[:25]}")
+                            if isinstance(r0, dict):
+                                print(
+                                    f"[ttn] rec.sample_prices[{sample_printed}] "
+                                    f"amount={r0.get('amount')} fare={r0.get('fare')} taxes={r0.get('taxes')} currency={r0.get('currency')}"
+                                )
+                            sample_printed += 1
+
+                        # Try amount, then fare
                         amt = r0.get("amount")
                         cur = r0.get("currency")
                         if amt is None:
+                            amt = r0.get("fare")
+
+                        if amt is None:
                             continue
+
                         val = float(amt)
                         if cheapest is None or val < cheapest:
                             cheapest = val
                             cheapest_currency = cur
                     except Exception:
                         continue
+
             elif isinstance(recs, dict):
                 rec_count = len(recs)
 
