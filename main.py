@@ -1692,51 +1692,56 @@ def process_date_pair_offers(
     max_offers_pair: int,
 ) -> List[FlightOption]:
     """
-    Fetch offers for exactly one (dep, ret) pair from Duffel, then map to FlightOption.
-    This bypasses generate_date_pairs to avoid any param-shape ambiguity.
+    TTN-only worker:
+      - For this (dep, ret) pair, call TTN (probe-mode scan using dep as departure)
+      - Stamp returned FlightOptions with the real dep/ret for this pair
+      - Return up to max_offers_pair (but TTN probe currently maps up to 3)
     """
-    slices = [
-        {"origin": params.origin, "destination": params.destination, "departure_date": dep.isoformat()},
-        {"origin": params.destination, "destination": params.origin, "departure_date": ret.isoformat()},
-    ]
-    pax = [{"type": "adult"} for _ in range(params.passengers)]
 
     per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
     per_pair_limit = max(1, min(per_pair_limit, 100))
 
-    offers_json: List[dict] = []
+    # Make a per-pair copy of params so TTN uses this dep date
     try:
-        offer_request = duffel_create_offer_request(slices, pax, params.cabin)
-        offer_request_id = offer_request.get("id")
-        if not offer_request_id:
-            return []
+        scan_params = params.model_copy(deep=True)
+    except Exception:
+        try:
+            scan_params = params.copy(deep=True)  # older pydantic
+        except Exception:
+            scan_params = SearchParams(**(params.dict() if hasattr(params, "dict") else dict(params)))
 
-        inline = offer_request.get("offers") or []
-        if inline:
-            offers_json = inline[:per_pair_limit]
-        else:
-            offers_json = duffel_list_offers(offer_request_id, limit=per_pair_limit)
+    # Force TTN scan to use this departure date (probe mode uses earliestDeparture)
+    try:
+        scan_params.earliestDeparture = dep
+        scan_params.latestDeparture = dep
+    except Exception:
+        pass
 
-    except HTTPException as e:
-        print(f"[pair_worker] Duffel HTTPException dep={dep} ret={ret}: {e.detail}")
-        return []
+    try:
+        ttn_opts = run_ttn_scan(scan_params) or []
     except Exception as e:
-        print(f"[pair_worker] Duffel error dep={dep} ret={ret}: {e}")
+        print(f"[pair_worker] TTN error dep={dep} ret={ret}: {e}")
         return []
 
-    if not offers_json:
+    if not ttn_opts:
         return []
 
-    mapped: List[FlightOption] = [
-    map_duffel_offer_to_option(offer, dep, ret, passengers=params.passengers)
-    for offer in offers_json
-    ]
+    # Stamp the real dep/ret for this pair so Flyyv UI + processing remains correct
+    dep_iso = dep.isoformat()
+    ret_iso = ret.isoformat()
 
-    # TTN probe disabled in async Duffel worker to avoid duplicate TTN calls and rate-limit waste.
-    # TTN should run in the primary search flow only (TTN-first or merged strategy), not per Duffel date-pair.
-    pass
+    for o in ttn_opts:
+        try:
+            o.departureDate = dep_iso
+            o.returnDate = ret_iso
+            o.origin = str(params.origin)
+            o.destination = str(params.destination)
+            o.originAirport = str(params.origin)
+            o.destinationAirport = str(params.destination)
+        except Exception:
+            pass
 
-    return mapped
+    return ttn_opts[:per_pair_limit]
 
 # ============================================================
 # END - ASYNC DATE-PAIR WORKER (CRITICAL)
