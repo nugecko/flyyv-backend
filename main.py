@@ -1736,6 +1736,98 @@ def process_date_pair_offers(
 # END - ASYNC DATE-PAIR WORKER (CRITICAL)
 # ============================================================
 
+# ============================================================
+# TTN API HELPERS (scaffold)
+# ============================================================
+
+TTN_BASE_URL = "https://v2.api.tickets.ua"
+
+def ttn_post(path: str, payload: dict) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {get_config_str('TTN_API_KEY')}",
+    }
+
+    url = f"{TTN_BASE_URL}{path}"
+    res = requests.post(url, json=payload, headers=headers, timeout=30)
+
+    if res.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTN POST {path} failed: {res.status_code} {res.text}",
+        )
+
+    return res.json().get("data", res.json())
+
+
+def ttn_get(path: str, params: Optional[dict] = None) -> dict:
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {get_config_str('TTN_API_KEY')}",
+    }
+
+    url = f"{TTN_BASE_URL}{path}"
+    res = requests.get(url, params=params, headers=headers, timeout=30)
+
+    if res.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTN GET {path} failed: {res.status_code} {res.text}",
+        )
+
+    return res.json().get("data", res.json())
+
+
+def map_ttn_offer_to_option(
+    offer: dict,
+    dep_date: date,
+    ret_date: date,
+    passengers: int,
+) -> FlightOption:
+    raise NotImplementedError("TTN offer mapping not implemented yet")
+
+
+def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
+    print(f"[ttn] run_ttn_scan START origin={params.origin} dest={params.destination}")
+
+    # TEMP: single hardcoded date pair for probe
+    dep = params.earliestDeparture or params.departure_date
+    ret = None
+
+    if not dep or not params.destination or not params.origin:
+        print("[ttn] missing required params, skipping TTN scan")
+        return []
+
+    payload = {
+        "routes": [
+            {
+                "from": params.origin,
+                "to": params.destination,
+                "date": dep,
+            }
+        ],
+        "passengers": {
+            "adults": params.passengers or 1
+        },
+        "cabinClass": (params.cabin or "BUSINESS").lower(),
+        "currency": params.currency or "USD",
+    }
+
+    try:
+        res = ttn_post("/avia/search", payload)
+        print("[ttn] raw avia/search response keys:", list(res.keys()) if isinstance(res, dict) else type(res))
+        print("[ttn] raw avia/search response sample:", str(res)[:800])
+    except Exception as e:
+        print(f"[ttn] avia/search failed: {e}")
+
+    print("[ttn] run_ttn_scan END (probe only)")
+    return []
+
+# =====================================================================
+# END: TTN API HELPERS (scaffold)
+# =====================================================================
+
 # =====================================================================
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
 # =====================================================================
