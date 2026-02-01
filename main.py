@@ -2054,9 +2054,14 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
                     except Exception as e:
                         print(f"[ttn] map failed: {e}")
                         continue
-
-                print(f"[ttn] mapped={len(mapped)} (returning up to 3 options)")
+                        
+                if mapped:
+                    o0 = mapped[0]
+                    print(f"[ttn] mapped={len(mapped)} first_origin={o0.origin} first_dest={o0.destination} first_originAirport={o0.originAirport} first_destAirport={o0.destinationAirport}")
+                else:
+                    print(f"[ttn] mapped=0")
                 return mapped
+
     except Exception as e:
         print(f"[ttn] return-mapping block failed: {e}")
 
