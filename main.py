@@ -1957,6 +1957,21 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             cheapest = None
             cheapest_currency = None
 
+            try:
+        # Prefer JSON to avoid XML parsing and to match TTN examples
+        res = ttn_get("/avia/search.json", params=qs)
+
+        if isinstance(res, dict) and "response" in res:
+            resp = res.get("response", {})
+            result = resp.get("result", {}) or {}
+            session = resp.get("session", {}) or {}
+            recs = resp.get("recommendations", None)
+
+            # Count + cheapest price sanity check (probe only)
+            rec_count = 0
+            cheapest = None
+            cheapest_currency = None
+
             if isinstance(recs, list):
                 rec_count = len(recs)
                 sample_printed = 0
@@ -2016,6 +2031,15 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
 
             elif isinstance(recs, dict):
                 rec_count = len(recs)
+
+            print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
+            print(
+                f"[ttn] session.id={session.get('id')} recs={rec_count} "
+                f"cheapest={cheapest} {cheapest_currency} service_class={service_class} dep={dep_str}"
+            )
+
+        else:
+            print("[ttn] unexpected response type/shape:", type(res), "sample:", str(res)[:800])
 
             print(f"[ttn] result.code={result.get('code')} desc={result.get('description')}")
             print(
