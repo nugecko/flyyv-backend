@@ -1753,24 +1753,23 @@ def process_date_pair_offers(
 
 TTN_BASE_URL = "https://v2.api.tickets.ua"
 
+def _get_ttn_api_key() -> Optional[str]:
+    # Prefer env var for secrets, fallback to admin_config if you later store it there
+    return os.getenv("TTN_API_KEY") or get_config_str("TTN_API_KEY", None)
 
-def _ttn_headers(include_content_type: bool = False) -> Dict[str, str]:
-    api_key = get_config_str("TTN_API_KEY")
+def ttn_post(path: str, payload: dict) -> dict:
+    api_key = _get_ttn_api_key()
     if not api_key:
         raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
 
-    headers: Dict[str, str] = {
+    headers = {
+        "Content-Type": "application/json",
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    if include_content_type:
-        headers["Content-Type"] = "application/json"
-    return headers
 
-
-def ttn_post(path: str, payload: dict) -> dict:
     url = f"{TTN_BASE_URL}{path}"
-    res = requests.post(url, json=payload, headers=_ttn_headers(include_content_type=True), timeout=30)
+    res = requests.post(url, json=payload, headers=headers, timeout=30)
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1778,17 +1777,22 @@ def ttn_post(path: str, payload: dict) -> dict:
             detail=f"TTN POST {path} failed: {res.status_code} {res.text}",
         )
 
-    try:
-        body = res.json()
-    except Exception:
-        return {"raw": res.text}
-
-    return body.get("data", body)
+    j = res.json()
+    return j.get("data", j)
 
 
 def ttn_get(path: str, params: Optional[dict] = None) -> dict:
+    api_key = _get_ttn_api_key()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
+
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
     url = f"{TTN_BASE_URL}{path}"
-    res = requests.get(url, params=params, headers=_ttn_headers(include_content_type=False), timeout=30)
+    res = requests.get(url, params=params, headers=headers, timeout=30)
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1796,13 +1800,8 @@ def ttn_get(path: str, params: Optional[dict] = None) -> dict:
             detail=f"TTN GET {path} failed: {res.status_code} {res.text}",
         )
 
-    try:
-        body = res.json()
-    except Exception:
-        return {"raw": res.text}
-
-    return body.get("data", body)
-
+    j = res.json()
+    return j.get("data", j)
 
 def map_ttn_offer_to_option(
     offer: dict,
