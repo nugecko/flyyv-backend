@@ -1748,37 +1748,24 @@ def process_date_pair_offers(
 # TTN API HELPERS (scaffold)
 # Notes:
 # - /avia/search appears to allow GET/HEAD only (POST returns 405).
+# - TTN expects an explicit query parameter named "key".
 # - This block is still "probe only": it logs the response and returns [].
 # ============================================================
 
 TTN_BASE_URL = "https://v2.api.tickets.ua"
 
+
 def _get_ttn_api_key() -> Optional[str]:
     # Prefer env var for secrets, fallback to admin_config if you later store it there
     return os.getenv("TTN_API_KEY") or get_config_str("TTN_API_KEY", None)
 
-def ttn_post(path: str, payload: dict) -> dict:
-    api_key = _get_ttn_api_key()
-    if not api_key:
-        raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
 
-    headers = {
-        "Content-Type": "application/json",
+def _ttn_headers() -> Dict[str, str]:
+    # Keep headers minimal, TTN auth is passed via query param "key"
+    return {
         "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
-
-    url = f"{TTN_BASE_URL}{path}"
-    res = requests.post(url, json=payload, headers=headers, timeout=30)
-
-    if res.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"TTN POST {path} failed: {res.status_code} {res.text}",
-        )
-
-    j = res.json()
-    return j.get("data", j)
 
 
 def ttn_get(path: str, params: Optional[dict] = None) -> dict:
@@ -1786,13 +1773,12 @@ def ttn_get(path: str, params: Optional[dict] = None) -> dict:
     if not api_key:
         raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
 
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-
     url = f"{TTN_BASE_URL}{path}"
-    res = requests.get(url, params=params, headers=headers, timeout=30)
+
+    merged_params = dict(params or {})
+    merged_params.setdefault("key", api_key)
+
+    res = requests.get(url, params=merged_params, headers=_ttn_headers(), timeout=30)
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1800,8 +1786,30 @@ def ttn_get(path: str, params: Optional[dict] = None) -> dict:
             detail=f"TTN GET {path} failed: {res.status_code} {res.text}",
         )
 
-    j = res.json()
-    return j.get("data", j)
+    return res.json()
+
+
+def ttn_post(path: str, payload: dict, params: Optional[dict] = None) -> dict:
+    # Not used for /avia/search (GET-only), but kept for later endpoints
+    api_key = _get_ttn_api_key()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
+
+    url = f"{TTN_BASE_URL}{path}"
+
+    merged_params = dict(params or {})
+    merged_params.setdefault("key", api_key)
+
+    res = requests.post(url, params=merged_params, json=payload, headers=_ttn_headers(), timeout=30)
+
+    if res.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTN POST {path} failed: {res.status_code} {res.text}",
+        )
+
+    return res.json()
+
 
 def map_ttn_offer_to_option(
     offer: dict,
@@ -1836,8 +1844,13 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
 
     try:
         res = ttn_get("/avia/search", params=qs)
-        print("[ttn] raw avia/search response keys:", list(res.keys()) if isinstance(res, dict) else type(res))
-        print("[ttn] raw avia/search response sample:", str(res)[:800])
+
+        if isinstance(res, dict):
+            print("[ttn] raw avia/search response keys:", list(res.keys()))
+            print("[ttn] raw avia/search response sample:", str(res)[:800])
+        else:
+            print("[ttn] raw avia/search response type:", type(res), "sample:", str(res)[:800])
+
     except Exception as e:
         print(f"[ttn] avia/search failed: {e}")
 
