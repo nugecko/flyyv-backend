@@ -1746,19 +1746,31 @@ def process_date_pair_offers(
 
 # ============================================================
 # TTN API HELPERS (scaffold)
+# Notes:
+# - /avia/search appears to allow GET/HEAD only (POST returns 405).
+# - This block is still "probe only": it logs the response and returns [].
 # ============================================================
 
 TTN_BASE_URL = "https://v2.api.tickets.ua"
 
-def ttn_post(path: str, payload: dict) -> dict:
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {get_config_str('TTN_API_KEY')}",
-    }
 
+def _ttn_headers(include_content_type: bool = False) -> Dict[str, str]:
+    api_key = get_config_str("TTN_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
+
+    headers: Dict[str, str] = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    if include_content_type:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+def ttn_post(path: str, payload: dict) -> dict:
     url = f"{TTN_BASE_URL}{path}"
-    res = requests.post(url, json=payload, headers=headers, timeout=30)
+    res = requests.post(url, json=payload, headers=_ttn_headers(include_content_type=True), timeout=30)
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1766,17 +1778,17 @@ def ttn_post(path: str, payload: dict) -> dict:
             detail=f"TTN POST {path} failed: {res.status_code} {res.text}",
         )
 
-    return res.json().get("data", res.json())
+    try:
+        body = res.json()
+    except Exception:
+        return {"raw": res.text}
+
+    return body.get("data", body)
 
 
 def ttn_get(path: str, params: Optional[dict] = None) -> dict:
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {get_config_str('TTN_API_KEY')}",
-    }
-
     url = f"{TTN_BASE_URL}{path}"
-    res = requests.get(url, params=params, headers=headers, timeout=30)
+    res = requests.get(url, params=params, headers=_ttn_headers(include_content_type=False), timeout=30)
 
     if res.status_code >= 400:
         raise HTTPException(
@@ -1784,7 +1796,12 @@ def ttn_get(path: str, params: Optional[dict] = None) -> dict:
             detail=f"TTN GET {path} failed: {res.status_code} {res.text}",
         )
 
-    return res.json().get("data", res.json())
+    try:
+        body = res.json()
+    except Exception:
+        return {"raw": res.text}
+
+    return body.get("data", body)
 
 
 def map_ttn_offer_to_option(
@@ -1799,31 +1816,27 @@ def map_ttn_offer_to_option(
 def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
     print(f"[ttn] run_ttn_scan START origin={params.origin} dest={params.destination}")
 
-    # TEMP: single hardcoded date pair for probe
-    dep = params.earliestDeparture or params.departure_date
-    ret = None
+    # TEMP: probe with a single departure date only
+    dep = getattr(params, "earliestDeparture", None) or getattr(params, "departure_date", None)
 
-    if not dep or not params.destination or not params.origin:
+    if not dep or not getattr(params, "origin", None) or not getattr(params, "destination", None):
         print("[ttn] missing required params, skipping TTN scan")
         return []
 
-    payload = {
-        "routes": [
-            {
-                "from": params.origin,
-                "to": params.destination,
-                "date": dep.isoformat() if hasattr(dep, "isoformat") else str(dep),
-            }
-        ],
-        "passengers": {
-            "adults": params.passengers or 1
-        },
-        "cabinClass": (params.cabin or "BUSINESS").lower(),
+    dep_str = dep.isoformat() if hasattr(dep, "isoformat") else str(dep)
+
+    # IMPORTANT: /avia/search is GET-only (POST returns 405), so use query params.
+    qs = {
+        "from": params.origin,
+        "to": params.destination,
+        "date": dep_str,
+        "adults": int(getattr(params, "passengers", 1) or 1),
+        "cabinClass": (getattr(params, "cabin", None) or "BUSINESS").lower(),
         "currency": "USD",
     }
 
     try:
-        res = ttn_post("/avia/search", payload)
+        res = ttn_get("/avia/search", params=qs)
         print("[ttn] raw avia/search response keys:", list(res.keys()) if isinstance(res, dict) else type(res))
         print("[ttn] raw avia/search response sample:", str(res)[:800])
     except Exception as e:
@@ -1832,9 +1845,10 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
     print("[ttn] run_ttn_scan END (probe only)")
     return []
 
-# =====================================================================
+
+# ============================================================
 # END: TTN API HELPERS (scaffold)
-# =====================================================================
+# ============================================================
 
 # =====================================================================
 # SECTION START: RUN_SEARCH_JOB (ASYNC JOB RUNNER)
