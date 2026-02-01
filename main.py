@@ -1778,6 +1778,8 @@ def ttn_get(path: str, params: Optional[dict] = None) -> dict:
     merged_params = dict(params or {})
     merged_params.setdefault("key", api_key)
 
+    print(f"[ttn] GET {path} params={merged_params}")
+
     res = requests.get(url, params=merged_params, headers=_ttn_headers(), timeout=30)
 
     if res.status_code >= 400:
