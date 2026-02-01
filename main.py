@@ -2119,6 +2119,7 @@ def run_search_job(job_id: str):
                 for o in ttn_preview:
                     o.departureDate = dep0.isoformat()
                     o.returnDate = ret0.isoformat()
+                    print(f"[ttn] preview_dates job_id={job_id} dep={dep0.isoformat()} ret={ret0.isoformat()}")
 
                 JOB_RESULTS[job_id] = (JOB_RESULTS.get(job_id) or []) + ttn_preview
                 print(f"[ttn] async_job_preview job_id={job_id} count={len(ttn_preview)}")
