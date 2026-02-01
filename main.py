@@ -1819,7 +1819,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
             "adults": params.passengers or 1
         },
         "cabinClass": (params.cabin or "BUSINESS").lower(),
-        "currency": params.currency or "USD",
+        "currency": "USD",
     }
 
     try:
