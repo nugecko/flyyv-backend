@@ -2563,7 +2563,7 @@ def run_price_watch() -> Dict[str, Any]:
     )
 
     watched_pairs = generate_date_pairs(params, max_pairs=365)
-    options = run_duffel_scan(params)
+    options = run_ttn_scan(params)
 
     scanned_pairs: List[Tuple[str, str]] = sorted({(opt.departureDate, opt.returnDate) for opt in options})
     if scanned_pairs:
@@ -2882,9 +2882,9 @@ def process_alert(alert: Alert, db: Session) -> None:
             options = None
             cache_hit = False
 
-    # Cache miss, run Duffel
+    # Cache miss, run TTN
     if options is None:
-        options = run_duffel_scan(scan_params)
+        options = run_ttn_scan(scan_params)
 
         # Cache write, store even empty to avoid hammering Duffel for dead windows
         def _opt_to_dict(o):
