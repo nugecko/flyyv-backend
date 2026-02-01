@@ -2106,13 +2106,20 @@ def run_search_job(job_id: str):
         total_pairs = len(date_pairs)
         print(f"[JOB {job_id}] date_pairs_ready total_pairs={total_pairs}")
 
-        # -----------------------------------------------------
+                # -----------------------------------------------------
         # TTN probe: run once per async job (not per date-pair)
         # Store as early preview results so UI can show something fast.
         # -----------------------------------------------------
         try:
+            # Use first generated pair so preview dates are meaningful
+            dep0, ret0 = date_pairs[0]
+
             ttn_preview = run_ttn_scan(job.params) or []
             if ttn_preview:
+                for o in ttn_preview:
+                    o.departureDate = dep0.isoformat()
+                    o.returnDate = ret0.isoformat()
+
                 JOB_RESULTS[job_id] = (JOB_RESULTS.get(job_id) or []) + ttn_preview
                 print(f"[ttn] async_job_preview job_id={job_id} count={len(ttn_preview)}")
         except Exception as e:
