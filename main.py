@@ -1843,6 +1843,7 @@ def run_ttn_scan(params: SearchParams) -> List[FlightOption]:
     }
 
     try:
+        print(f"[ttn] avia/search params={params_qs}")
         res = ttn_get("/avia/search", params=qs)
 
         if isinstance(res, dict):
