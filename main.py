@@ -248,6 +248,11 @@ class CreditUpdateRequest(BaseModel):
     creditAmount: Optional[int] = None
     value: Optional[int] = None
 
+class TTNBookRequest(BaseModel):
+    session_id: str
+    recommendation_id: str
+    email: Optional[str] = None
+
 class SearchParams(BaseModel):
     origin: str
     destination: str
@@ -3562,6 +3567,25 @@ def _run_search_job_guarded(job_id: str, user_key: str):
 
         _end_user_inflight(user_key)
         _GLOBAL_SEARCH_SEM.release()
+
+@app.post("/ttn/book")
+def ttn_book(payload: TTNBookRequest):
+    """
+    TTN booking stub.
+    Phase 1 goal: prove we can call TTN booking endpoint(s) using
+    session_id + recommendation_id and see a structured response.
+    """
+    print(f"[ttn] book.stub START session_id={payload.session_id} rec_id={payload.recommendation_id}")
+
+    # TODO: replace this with the real TTN booking endpoint once confirmed from TTN docs
+    # For now, just echo back what we have so frontend wiring can be tested later.
+    return {
+        "status": "stub",
+        "provider": "ttn",
+        "session_id": payload.session_id,
+        "recommendation_id": payload.recommendation_id,
+        "next": "replace stub with TTN booking endpoint call",
+    }
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
