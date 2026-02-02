@@ -299,9 +299,14 @@ class SearchJob(BaseModel):
     processed_pairs: int = 0
     error: Optional[str] = None
 
-
 class FlightOption(BaseModel):
     id: str
+
+    # Provider identity, used for checkout/booking handoff
+    provider: Optional[str] = None
+    providerSessionId: Optional[str] = None
+    providerRecommendationId: Optional[str] = None
+
     airline: str
     airlineCode: Optional[str] = None
     price: float
@@ -334,7 +339,6 @@ class FlightOption(BaseModel):
 
     bookingUrl: Optional[str] = None
     url: Optional[str] = None
-
 
 class SearchStartResponse(BaseModel):
     status: JobStatus
