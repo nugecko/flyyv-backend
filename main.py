@@ -3652,7 +3652,7 @@ def ttn_book(payload: TTNBookRequest):
         results.append(r_get)
         if r_get.get("status_code") and r_get["status_code"] != 404:
             print(f"[ttn] book.probe HIT method=GET path={p} status={r_get['status_code']}")
-            re
+            return {"status": "probe", "hit": r_get, "all": results}
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
