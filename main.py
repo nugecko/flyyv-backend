@@ -1692,29 +1692,41 @@ def process_date_pair_offers(
     max_offers_pair: int,
 ) -> List[FlightOption]:
     """
-    TTN-only worker:
-    - Fetch offers for exactly one (dep, ret) pair from TTN
-    - Map to FlightOption
-    - Apply per-pair cap
+    Fetch offers for exactly one (dep, ret) pair using TTN, then map to FlightOption.
+    TTN scan is executed per departure date (probe-first), then we stamp dep/ret onto results.
     """
+
+    per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
+    per_pair_limit = max(1, min(per_pair_limit, 50))
+
     try:
-        per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
-        per_pair_limit = max(1, min(per_pair_limit, 50))  # TTN can be heavy, keep sane
+        # Create a copy of params and force the single departure date for this pair.
+        # We keep destination/origin/cabin/passengers from the incoming params.
+        scan_params = SearchParams(**params.model_dump())
+        scan_params.earliestDeparture = dep
 
-        # Create a copy of params with the pair-specific departure date
-        # (SearchParams is pydantic, but keep compatibility across versions)
-        if hasattr(params, "model_copy"):
-            pair_params = params.model_copy(update={"earliestDeparture": dep})
-        elif hasattr(params, "copy"):
-            pair_params = params.copy(update={"earliestDeparture": dep})
-        else:
-            pair_params = params
+        opts = run_ttn_scan(scan_params) or []
 
-        results = run_ttn_scan(pair_params, dep_override=dep, ret_override=ret) or []
-        if results:
-            return results[:per_pair_limit]
+        # Stamp the pair dates onto the returned options so Flyyv UI logic stays consistent
+        dep_iso = dep.isoformat()
+        ret_iso = ret.isoformat()
+
+        for o in opts:
+            try:
+                o.departureDate = dep_iso
+                o.returnDate = ret_iso
+            except Exception:
+                pass
+
+        # Keep per-pair cap behavior consistent with the rest of the pipeline
+        opts = opts[:per_pair_limit]
+
+        print(f"[pair_worker] TTN dep={dep_iso} ret={ret_iso} mapped={len(opts)}")
+        return opts
+
+    except HTTPException as e:
+        print(f"[pair_worker] TTN HTTPException dep={dep} ret={ret}: {e.detail}")
         return []
-
     except Exception as e:
         print(f"[pair_worker] TTN error dep={dep} ret={ret}: {e}")
         return []
