@@ -2073,6 +2073,7 @@ def run_ttn_scan(
         if isinstance(res, dict) and "response" in res:
             resp = res.get("response", {}) or {}
             recs = resp.get("recommendations", None)
+            session_id = (resp.get("session") or {}).get("id")
 
             if isinstance(recs, list) and recs:
                 dep_date_obj = dep if isinstance(dep, date) else None
@@ -2100,6 +2101,7 @@ def run_ttn_scan(
                                 passengers=pax,
                                 origin=str(params.origin),
                                 destination=str(params.destination),
+                                session_id=session_id,
                             )
                         )
                     except Exception as e:
