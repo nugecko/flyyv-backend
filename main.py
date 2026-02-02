@@ -1982,20 +1982,39 @@ def run_ttn_scan(
                 for r0 in recs:
                     if not isinstance(r0, dict):
                         continue
-
+                    
                     if sample_printed < 2:
                         keys = list(r0.keys())
                         print(f"[ttn] rec.sample_keys[{sample_printed}]={keys[:25]}")
+
                         print(
                             f"[ttn] rec.sample_prices[{sample_printed}] "
                             f"amount={r0.get('amount')} fare={r0.get('fare')} "
                             f"taxes={r0.get('taxes')} currency={r0.get('currency')}"
                         )
+
                         routes0 = r0.get("routes")
                         print(
                             f"[ttn] rec.sample_routes[{sample_printed}] "
                             f"type={type(routes0).__name__} preview={str(routes0)[:600]}"
                         )
+
+                        # 🔑 Checkout / booking candidates
+                        cand_keys = []
+                        for k in r0.keys():
+                            kl = str(k).lower()
+                            if any(s in kl for s in ["url", "link", "book", "pay", "payment", "order", "redirect", "checkout", "fat", "token"]):
+                                cand_keys.append(k)
+
+                        if cand_keys:
+                            cand = {k: r0.get(k) for k in cand_keys}
+                            print(
+                                f"[ttn] rec.checkout_candidates[{sample_printed}] "
+                                f"keys={cand_keys} values_preview={str(cand)[:800]}"
+                            )
+                        else:
+                            print(f"[ttn] rec.checkout_candidates[{sample_printed}] keys=[]")
+
                         sample_printed += 1
 
                     cur = r0.get("currency")
