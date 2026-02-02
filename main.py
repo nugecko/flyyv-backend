@@ -3571,21 +3571,88 @@ def _run_search_job_guarded(job_id: str, user_key: str):
 @app.post("/ttn/book")
 def ttn_book(payload: TTNBookRequest):
     """
-    TTN booking stub.
-    Phase 1 goal: prove we can call TTN booking endpoint(s) using
-    session_id + recommendation_id and see a structured response.
+    TTN booking probe.
+    Phase 1 goal: discover the correct TTN booking/payment endpoint shape
+    using session_id + recommendation_id.
     """
-    print(f"[ttn] book.stub START session_id={payload.session_id} rec_id={payload.recommendation_id}")
+    api_key = _get_ttn_api_key()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="TTN_API_KEY is not configured")
 
-    # TODO: replace this with the real TTN booking endpoint once confirmed from TTN docs
-    # For now, just echo back what we have so frontend wiring can be tested later.
-    return {
-        "status": "stub",
-        "provider": "ttn",
+    print(f"[ttn] book.probe START session_id={payload.session_id} rec_id={payload.recommendation_id}")
+
+    def _req(method: str, path: str, json_payload: Optional[dict] = None) -> dict:
+        url = f"{TTN_BASE_URL}{path}"
+        params = {"key": api_key}
+
+        if method.upper() == "GET":
+            params.update({
+                "session_id": payload.session_id,
+                "recommendation_id": payload.recommendation_id,
+            })
+
+        try:
+            r = requests.request(
+                method=method.upper(),
+                url=url,
+                params=params,
+                json=json_payload if method.upper() != "GET" else None,
+                headers=_ttn_headers(),
+                timeout=30,
+            )
+        except Exception as e:
+            return {
+                "path": path,
+                "method": method.upper(),
+                "ok": False,
+                "error": str(e),
+            }
+
+        body = (r.text or "")[:1200]
+        out = {
+            "path": path,
+            "method": method.upper(),
+            "status_code": r.status_code,
+            "content_type": r.headers.get("content-type"),
+            "body_preview": body,
+        }
+
+        if "application/json" in (out["content_type"] or ""):
+            try:
+                out["json"] = r.json()
+            except Exception:
+                pass
+
+        return out
+
+    candidates = [
+        "/avia/book.json",
+        "/avia/booking/create.json",
+        "/avia/booking.json",
+        "/avia/booking/start.json",
+        "/avia/booking/confirm.json",
+        "/avia/order/create.json",
+        "/avia/order.json",
+        "/avia/payment.json",
+        "/avia/pay.json",
+        "/avia/checkout.json",
+        "/avia/ticketing.json",
+        "/avia/issue.json",
+    ]
+
+    post_payload = {
         "session_id": payload.session_id,
         "recommendation_id": payload.recommendation_id,
-        "next": "replace stub with TTN booking endpoint call",
+        "email": payload.email,
     }
+
+    results = []
+    for p in candidates:
+        r_get = _req("GET", p)
+        results.append(r_get)
+        if r_get.get("status_code") and r_get["status_code"] != 404:
+            print(f"[ttn] book.probe HIT method=GET path={p} status={r_get['status_code']}")
+            re
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
