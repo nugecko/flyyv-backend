@@ -1823,6 +1823,7 @@ def map_ttn_offer_to_option(
     passengers: int,
     origin: str,
     destination: str,
+    session_id: Optional[str] = None,
 ) -> FlightOption:
     """
     Minimal TTN recommendation -> FlightOption mapping (probe mode).
@@ -1894,8 +1895,10 @@ def map_ttn_offer_to_option(
 
     return FlightOption(
         id=opt_id,
+        provider="ttn",
+        providerSessionId=str(session_id) if session_id else None,
+        providerRecommendationId=str(raw_id) if raw_id else None,
         airline=str(airline_name),
-        airlineCode=None,
         price=price,
         currency=str(cur),
         departureDate=dep_date.isoformat(),
