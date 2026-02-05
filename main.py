@@ -3254,8 +3254,8 @@ def ttn_book(payload: TTNBookRequest):
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
     request_id = str(uuid4())
 
-    if not DUFFEL_ACCESS_TOKEN:
-        return {"status": "error", "source": "duffel_not_configured", "options": []}
+    if not _get_ttn_api_key():
+        return {"status": "error", "source": "ttn_not_configured", "options": []}
 
     try:
         print(f"[guardrail] request_keys={sorted(list(params.model_dump().keys()))}")
