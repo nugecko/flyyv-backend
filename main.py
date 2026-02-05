@@ -1831,13 +1831,8 @@ def map_ttn_offer_to_option(
     session_id: Optional[str] = None,
 ) -> FlightOption:
     """
-    Minimal TTN recommendation -> FlightOption mapping (probe mode).
-
-    Phase 1 goal:
-      - produce valid FlightOption objects (required fields filled)
-      - price extracted from amount[currency] (or fallback fare+taxes)
-      - basic stops and duration from routes if present
-      - do not attempt full segment mapping yet
+    TTN recommendation -> FlightOption mapping (full card details).
+    Builds outboundSegments / returnSegments compatible with the Duffel segment shape used by Base44.
     """
     import hashlib
     import json as _json
@@ -1845,6 +1840,9 @@ def map_ttn_offer_to_option(
     if not isinstance(offer, dict):
         raise ValueError("TTN offer is not a dict")
 
+    # -------------------------
+    # Price
+    # -------------------------
     cur = offer.get("currency") or "EUR"
 
     amt = offer.get("amount")
@@ -1865,6 +1863,9 @@ def map_ttn_offer_to_option(
 
     price = float(amt_val) if amt_val is not None else 0.0
 
+    # -------------------------
+    # IDs
+    # -------------------------
     raw_id = offer.get("id") or offer.get("recommendation_id") or offer.get("rec_id") or offer.get("uid")
     if raw_id:
         opt_id = f"ttn:{raw_id}"
@@ -1873,30 +1874,294 @@ def map_ttn_offer_to_option(
         h = hashlib.md5(payload_str.encode("utf-8")).hexdigest()[:16]
         opt_id = f"ttn:hash:{h}"
 
-    # Derive some basics from routes if present
+    # -------------------------
+    # Helpers
+    # -------------------------
+    def _clean_dt(s: Any) -> Optional[str]:
+        if not s:
+            return None
+        s = str(s).strip()
+        # normalize Zulu
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        # keep as string, frontend expects ISO-like
+        return s
+
+    def _try_parse_dt(s: Any) -> Optional[datetime]:
+        s2 = _clean_dt(s)
+        if not s2:
+            return None
+        try:
+            return datetime.fromisoformat(s2)
+        except Exception:
+            # try common TTN-ish formats
+            for fmt in ("%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(s2, fmt)
+                except Exception:
+                    continue
+        return None
+
+    def _iata_from(seg: dict, keys: List[str]) -> Optional[str]:
+        for k in keys:
+            v = seg.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip().upper()
+            if isinstance(v, dict):
+                # try nested common fields
+                for kk in ("iata", "iata_code", "code"):
+                    vv = v.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        return vv.strip().upper()
+        return None
+
+    def _name_from(seg: dict, keys: List[str]) -> Optional[str]:
+        for k in keys:
+            v = seg.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, dict):
+                for kk in ("name", "title"):
+                    vv = v.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        return vv.strip()
+        return None
+
+    def _carrier_code(seg: dict) -> Optional[str]:
+        # try several common keys
+        for k in ("marketingCarrier", "marketing_carrier", "carrier", "airline", "operatingCarrier", "operating_carrier"):
+            v = seg.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip().upper()
+            if isinstance(v, dict):
+                for kk in ("iata", "iata_code", "code"):
+                    vv = v.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        return vv.strip().upper()
+        return None
+
+    def _flight_number(seg: dict) -> Optional[str]:
+        for k in ("flightNumber", "flight_number", "marketing_carrier_flight_number", "number"):
+            v = seg.get(k)
+            if v is None:
+                continue
+            v = str(v).strip()
+            if v:
+                return v
+        return None
+
+    # -------------------------
+    # Routes and segments
+    # -------------------------
+    routes = offer.get("routes")
+    outbound_segments: List[Dict[str, Any]] = []
+    return_segments: List[Dict[str, Any]] = []
     stops = 0
     duration_minutes = 0
+    total_duration_minutes = 0
 
-    routes = offer.get("routes")
+    stopover_codes: List[str] = []
+    stopover_airports: List[str] = []
+    aircraft_codes: List[str] = []
+    aircraft_names: List[str] = []
+
+    # defaults from provided dates
+    dep_date_str = dep_date.isoformat()
+    ret_date_str = ret_date.isoformat()
+
+    airline_code: Optional[str] = None
+    airline_name: Optional[str] = None
+
+    def _build_segments(direction: str, segs: List[dict]) -> Tuple[List[Dict[str, Any]], int, Optional[datetime], Optional[datetime]]:
+        seg_out: List[Dict[str, Any]] = []
+        total_min = 0
+        first_dep: Optional[datetime] = None
+        last_arr: Optional[datetime] = None
+
+        for i, s in enumerate(segs):
+            if not isinstance(s, dict):
+                continue
+
+            # Times: try lots of keys safely
+            dep_dt = (
+                _try_parse_dt(s.get("departingAt"))
+                or _try_parse_dt(s.get("departure_datetime"))
+                or _try_parse_dt(s.get("departure_at"))
+                or _try_parse_dt(s.get("departure"))
+                or _try_parse_dt(s.get("dep_time"))
+            )
+            arr_dt = (
+                _try_parse_dt(s.get("arrivingAt"))
+                or _try_parse_dt(s.get("arrival_datetime"))
+                or _try_parse_dt(s.get("arrival_at"))
+                or _try_parse_dt(s.get("arrival"))
+                or _try_parse_dt(s.get("arr_time"))
+            )
+
+            # Airports
+            o_code = _iata_from(s, ["origin", "from", "departure_airport", "departureAirport", "dep_airport", "dep"])
+            d_code = _iata_from(s, ["destination", "to", "arrival_airport", "arrivalAirport", "arr_airport", "arr"])
+
+            o_name = _name_from(s, ["originAirport", "departure_airport", "departureAirport", "origin"])
+            d_name = _name_from(s, ["destinationAirport", "arrival_airport", "arrivalAirport", "destination"])
+
+            mkt = _carrier_code(s)
+            fn = _flight_number(s)
+
+            if airline_code is None and mkt:
+                # pick first marketing carrier as primary
+                nonlocal_airline_code = mkt
+            else:
+                nonlocal_airline_code = None
+
+            # segment duration
+            seg_min = 0
+            if dep_dt and arr_dt:
+                try:
+                    seg_min = int((arr_dt - dep_dt).total_seconds() // 60)
+                    if seg_min < 0:
+                        seg_min = 0
+                except Exception:
+                    seg_min = 0
+            else:
+                # fallback key
+                dur = s.get("durationMinutes") or s.get("duration") or s.get("segment_duration")
+                try:
+                    seg_min = int(dur) if dur is not None else 0
+                except Exception:
+                    seg_min = 0
+
+            # aircraft
+            ac_code = None
+            ac_name = None
+            if isinstance(s.get("aircraft"), dict):
+                ac_code = s["aircraft"].get("code") or s["aircraft"].get("iata_code")
+                ac_name = s["aircraft"].get("name")
+            else:
+                ac_code = s.get("aircraftCode") or s.get("aircraft_code")
+                ac_name = s.get("aircraftName") or s.get("aircraft_name")
+
+            if ac_code:
+                aircraft_codes.append(str(ac_code))
+            if ac_name:
+                aircraft_names.append(str(ac_name))
+
+            dep_str = _clean_dt(dep_dt.isoformat()) if dep_dt else _clean_dt(s.get("departingAt")) or _clean_dt(s.get("departure_datetime"))
+            arr_str = _clean_dt(arr_dt.isoformat()) if arr_dt else _clean_dt(s.get("arrivingAt")) or _clean_dt(s.get("arrival_datetime"))
+
+            seg_out.append(
+                {
+                    "direction": direction,
+                    "flightNumber": fn,
+                    "marketingCarrier": mkt,
+                    "operatingCarrier": None,
+                    "origin": o_code,
+                    "destination": d_code,
+                    "originAirport": o_name,
+                    "destinationAirport": d_name,
+                    "departingAt": dep_str,
+                    "arrivingAt": arr_str,
+                    "aircraftCode": ac_code,
+                    "aircraftName": ac_name,
+                    "durationMinutes": seg_min,
+                    "layoverMinutesToNext": None,
+                    "cabin": None,
+                    "bookingCode": None,
+                    "fareBrand": None,
+                }
+            )
+
+            total_min += seg_min
+
+            if dep_dt and first_dep is None:
+                first_dep = dep_dt
+            if arr_dt:
+                last_arr = arr_dt
+
+            # stopovers (exclude last segment destination)
+            if i < len(segs) - 1:
+                if d_code:
+                    stopover_codes.append(d_code)
+                if d_name:
+                    stopover_airports.append(d_name)
+
+            # set airline_code and airline_name once, from first segment that has it
+            nonlocal nonlocal_airline_code
+            if nonlocal_airline_code:
+                nonlocal_airline_code = None  # just to avoid lint confusion
+
+        return seg_out, total_min, first_dep, last_arr
+
+    # Actually build outbound/return based on TTN routes list
     if isinstance(routes, list) and routes:
-        try:
-            # route_index 0 is outbound in their structure
-            r0 = routes[0] if isinstance(routes[0], dict) else None
-            if r0:
-                duration_minutes = int(r0.get("route_duration") or 0) or 0
-                segs = r0.get("segments")
-                if isinstance(segs, list):
-                    stops = max(0, len(segs) - 1)
-        except Exception:
-            pass
+        # outbound is usually routes[0]
+        r_out = routes[0] if isinstance(routes[0], dict) else None
+        if r_out:
+            segs = r_out.get("segments")
+            if isinstance(segs, list) and segs:
+                outbound_segments, out_min, out_first, out_last = _build_segments("outbound", segs)
+                total_duration_minutes += out_min
+                stops = max(stops, max(0, len(segs) - 1))
+                if out_first:
+                    dep_date_str = out_first.date().isoformat()
 
+                # primary airline from first outbound segment
+                if outbound_segments:
+                    airline_code = outbound_segments[0].get("marketingCarrier") or airline_code
+
+            # fallback route_duration if segments did not give durations
+            try:
+                rd = int(r_out.get("route_duration") or 0)
+                if rd > 0 and out_min == 0:
+                    total_duration_minutes += rd
+            except Exception:
+                pass
+
+        # inbound is usually routes[1] if present
+        if len(routes) > 1:
+            r_in = routes[1] if isinstance(routes[1], dict) else None
+            if r_in:
+                segs = r_in.get("segments")
+                if isinstance(segs, list) and segs:
+                    return_segments, in_min, in_first, in_last = _build_segments("return", segs)
+                    total_duration_minutes += in_min
+                    stops = max(stops, max(0, len(segs) - 1))
+                    if in_last:
+                        ret_date_str = in_last.date().isoformat()
+                    elif in_first:
+                        ret_date_str = in_first.date().isoformat()
+
+                    if airline_code is None and return_segments:
+                        airline_code = return_segments[0].get("marketingCarrier")
+
+                try:
+                    rd = int(r_in.get("route_duration") or 0)
+                    if rd > 0 and in_min == 0:
+                        total_duration_minutes += rd
+                except Exception:
+                    pass
+
+    # If we still have no total duration, at least expose outbound route duration
+    duration_minutes = int(total_duration_minutes) if total_duration_minutes else 0
+
+    # Airline name fallback
     airline_name = (
         offer.get("airline")
         or offer.get("carrier")
         or offer.get("validating_carrier")
         or offer.get("validating_supplier")
-        or "TTN"
+        or (airline_code if airline_code else "TTN")
     )
+
+    # Clean stopovers
+    if not stopover_codes:
+        stopover_codes = None
+    if not stopover_airports:
+        stopover_airports = None
+    if not aircraft_codes:
+        aircraft_codes = None
+    if not aircraft_names:
+        aircraft_names = None
 
     return FlightOption(
         id=opt_id,
@@ -1904,31 +2169,31 @@ def map_ttn_offer_to_option(
         providerSessionId=str(session_id) if session_id else None,
         providerRecommendationId=str(raw_id) if raw_id else None,
         airline=str(airline_name),
+        airlineCode=airline_code,
         price=price,
         currency=str(cur),
-        departureDate=dep_date.isoformat(),
-        returnDate=ret_date.isoformat(),
+        departureDate=dep_date_str,
+        returnDate=ret_date_str,
         stops=int(stops),
         cabinSummary=None,
         cabinHighest=None,
         cabinByDirection=None,
-        durationMinutes=int(duration_minutes) if duration_minutes else 0,
-        totalDurationMinutes=None,
+        durationMinutes=duration_minutes,
+        totalDurationMinutes=duration_minutes if duration_minutes else None,
         duration=None,
         origin=str(origin),
         destination=str(destination),
         originAirport=str(origin),
         destinationAirport=str(destination),
-        stopoverCodes=None,
-        stopoverAirports=None,
-        outboundSegments=None,
-        returnSegments=None,
-        aircraftCodes=None,
-        aircraftNames=None,
+        stopoverCodes=stopover_codes,
+        stopoverAirports=stopover_airports,
+        outboundSegments=outbound_segments or None,
+        returnSegments=return_segments or None,
+        aircraftCodes=aircraft_codes,
+        aircraftNames=aircraft_names,
         bookingUrl=None,
         url=None,
     )
-
 
 def run_ttn_scan(
     params: SearchParams,
