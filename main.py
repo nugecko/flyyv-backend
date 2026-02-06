@@ -3426,10 +3426,12 @@ def ttn_book(payload: TTNBookRequest):
         params = {"key": api_key}
 
         if method.upper() == "GET":
-            params.update({
-                "session_id": payload.session_id,
-                "recommendation_id": payload.recommendation_id,
-            })
+            params.update(
+                {
+                    "session_id": payload.session_id,
+                    "recommendation_id": payload.recommendation_id,
+                }
+            )
 
         try:
             r = requests.request(
@@ -3480,23 +3482,17 @@ def ttn_book(payload: TTNBookRequest):
         "/avia/issue.json",
     ]
 
-    post_payload = {
-        "session_id": payload.session_id,
-        "recommendation_id": payload.recommendation_id,
-        "email": payload.email,
-    }
-
     results = []
     for p in candidates:
         r_get = _req("GET", p)
         results.append(r_get)
 
-    if r_get.get("status_code") and r_get["status_code"] != 404:
-        print(f"[ttn] book.probe HIT method=GET path={p} status={r_get['status_code']}")
-        return {"status": "probe", "hit": r_get, "all": results}
+        if r_get.get("status_code") and r_get["status_code"] != 404:
+            print(f"[ttn] book.probe HIT method=GET path={p} status={r_get['status_code']}")
+            return {"status": "probe", "hit": r_get, "all": results}
 
-# If we got here, everything was 404 (or no status_code), return full probe list
-return {"status": "probe", "hit": None, "all": results}
+    # If we got here, everything was 404 (or no status_code)
+    return {"status": "probe", "hit": None, "all": results}
 
 @app.post("/ttn/checkout-link")
 def ttn_checkout_link(payload: TTNCheckoutLinkRequest):
