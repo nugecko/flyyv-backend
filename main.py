@@ -2205,6 +2205,28 @@ def run_ttn_scan(
     else:
         service_class = "A"
 
+        # Compute return date if we can
+    ret_date_obj = None
+
+    # 1) Prefer explicit override from date-pair worker
+    if isinstance(ret_override, date):
+        ret_date_obj = ret_override
+
+    # 2) Otherwise infer from fixed nights (FlyyvFlex style)
+    if ret_date_obj is None and hasattr(dep, "strftime"):
+        try:
+            nights = getattr(params, "minStayDays", None)
+            if nights is None:
+                nights = getattr(params, "nights", None)
+            if nights is not None:
+                nights = int(nights)
+                if nights > 0:
+                    ret_date_obj = dep + timedelta(days=nights)
+        except Exception:
+            ret_date_obj = None
+
+    ret_str = ret_date_obj.strftime("%d-%m-%Y") if ret_date_obj else None
+
     qs = {
         "destinations[0][departure]": params.origin,
         "destinations[0][arrival]": params.destination,
@@ -2213,6 +2235,16 @@ def run_ttn_scan(
         "service_class": service_class,
         "lang": "en",
     }
+
+    # Roundtrip only when we have a return date
+    if ret_str:
+        qs.update(
+            {
+                "destinations[1][departure]": params.destination,
+                "destinations[1][arrival]": params.origin,
+                "destinations[1][date]": ret_str,
+            }
+        )
 
     res = None
     recs = None
