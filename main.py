@@ -2374,7 +2374,26 @@ def run_ttn_scan(
                 dep_date_obj = date.today()
 
         # Use override return date when provided, otherwise keep same-day default
-        ret_date_obj = ret_override if isinstance(ret_override, date) else dep_date_obj
+                # Use the same return date logic as the TTN request
+        ret_date_obj = None
+
+        if isinstance(ret_override, date):
+            ret_date_obj = ret_override
+        else:
+            try:
+                nights = getattr(params, "minStayDays", None)
+                if nights is None:
+                    nights = getattr(params, "nights", None)
+                if nights is not None:
+                    nights = int(nights)
+                    if nights > 0:
+                        ret_date_obj = dep_date_obj + timedelta(days=nights)
+            except Exception:
+                ret_date_obj = None
+
+        if ret_date_obj is None:
+            ret_date_obj = dep_date_obj
+
 
         mapped: List[FlightOption] = []
         attempted = 0
