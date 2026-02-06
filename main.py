@@ -1910,7 +1910,14 @@ def map_ttn_offer_to_option(
         try:
             return datetime.fromisoformat(s2)
         except Exception:
-            for fmt in ("%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+            for fmt in (
+                "%d-%m-%Y %H:%M",
+                "%d-%m-%Y %H:%M:%S",
+                "%d-%m-%Y",
+                "%d.%m.%Y %H:%M",   # TTN e.g. 01.03.2026 06:20
+                "%d.%m.%Y %H:%M:%S",
+                "%d.%m.%Y",
+            ):
                 try:
                     return datetime.strptime(s2, fmt)
                 except Exception:
@@ -1987,6 +1994,7 @@ def map_ttn_offer_to_option(
                 or _try_parse_dt(s.get("departure_at"))
                 or _try_parse_dt(s.get("departure"))
                 or _try_parse_dt(s.get("dep_time"))
+                or _try_parse_dt(s.get("departure_time"))  # TTN
             )
             arr_dt = (
                 _try_parse_dt(s.get("arrivingAt"))
@@ -1994,13 +2002,21 @@ def map_ttn_offer_to_option(
                 or _try_parse_dt(s.get("arrival_at"))
                 or _try_parse_dt(s.get("arrival"))
                 or _try_parse_dt(s.get("arr_time"))
+                or _try_parse_dt(s.get("arrival_time"))  # TTN
+            )
+            
+            o_code = _iata_from(
+                s,
+                ["origin", "from", "departure_airport", "departureAirport", "dep_airport", "dep", "departure_airport"],
+            )
+            d_code = _iata_from(
+                s,
+                ["destination", "to", "arrival_airport", "arrivalAirport", "arr_airport", "arr", "arrival_airport"],
             )
 
-            o_code = _iata_from(s, ["origin", "from", "departure_airport", "departureAirport", "dep_airport", "dep"])
-            d_code = _iata_from(s, ["destination", "to", "arrival_airport", "arrivalAirport", "arr_airport", "arr"])
-
-            o_name = _name_from(s, ["originAirport", "departure_airport", "departureAirport", "origin"])
-            d_name = _name_from(s, ["destinationAirport", "arrival_airport", "arrivalAirport", "destination"])
+            # TTN provides airport names separately
+            o_name = _name_from(s, ["originAirport", "departure_airport_name", "departureAirport", "origin", "departure_airport"])
+            d_name = _name_from(s, ["destinationAirport", "arrival_airport_name", "arrivalAirport", "destination", "arrival_airport"])
 
             mkt = _carrier_code(s)
             fn = _flight_number(s)
