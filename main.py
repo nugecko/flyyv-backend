@@ -253,6 +253,23 @@ class TTNBookRequest(BaseModel):
     recommendation_id: str
     email: Optional[str] = None
 
+class TTNPassenger(BaseModel):
+    type: str  # ADT, CHD, INF
+    firstname: str
+    lastname: str
+    birthday: str  # DD-MM-YYYY
+    gender: str  # M, F
+    citizenship: str  # 2-letter
+    docnum: str
+    doc_expire_date: str  # DD-MM-YYYY
+
+class TTNCheckoutLinkRequest(BaseModel):
+    providerSessionId: str
+    providerRecommendationId: str
+    real_email: str
+    real_phone: str
+    passengers: List[TTNPassenger]
+
 class SearchParams(BaseModel):
     origin: str
     destination: str
