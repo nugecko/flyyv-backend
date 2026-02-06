@@ -3488,15 +3488,15 @@ def ttn_book(payload: TTNBookRequest):
 
     results = []
     for p in candidates:
-    r_get = _req("GET", p)
-    results.append(r_get)
+        r_get = _req("GET", p)
+        results.append(r_get)
 
     if r_get.get("status_code") and r_get["status_code"] != 404:
         print(f"[ttn] book.probe HIT method=GET path={p} status={r_get['status_code']}")
         return {"status": "probe", "hit": r_get, "all": results}
 
-    # 👇 this runs ONLY if no candidate matched
-    return {"status": "probe", "hit": None, "all": results}
+# If we got here, everything was 404 (or no status_code), return full probe list
+return {"status": "probe", "hit": None, "all": results}
 
 @app.post("/ttn/checkout-link")
 def ttn_checkout_link(payload: TTNCheckoutLinkRequest):
