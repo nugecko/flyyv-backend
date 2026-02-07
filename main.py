@@ -648,6 +648,43 @@ USER_WALLETS: Dict[str, int] = {}
 JOBS: Dict[str, SearchJob] = {}
 JOB_RESULTS: Dict[str, List[FlightOption]] = {}
 
+def run_search_job(job_id: str) -> None:
+    job = JOBS.get(job_id)
+    if not job:
+        print(f"[JOB {job_id}] missing job, aborting")
+        return
+
+    try:
+        job.status = JobStatus.RUNNING
+
+        # Build date pairs for this job
+        pairs = generate_date_pairs(job.params, max_pairs=3650)  # big safety cap
+        job.total_pairs = len(pairs)
+        job.processed_pairs = 0
+
+        all_options: List[FlightOption] = []
+        JOB_RESULTS[job_id] = []
+
+        for dep, ret in pairs:
+            try:
+                # TTN scan for this specific dep/ret pair
+                opts = run_ttn_scan(job.params, dep_override=dep, ret_override=ret)
+                if opts:
+                    all_options.extend(opts)
+                    JOB_RESULTS[job_id] = all_options
+            except Exception as e:
+                print(f"[JOB {job_id}] pair_failed dep={dep} ret={ret} err={type(e).__name__}: {e}")
+
+            job.processed_pairs += 1
+
+        job.status = JobStatus.DONE
+        print(f"[JOB {job_id}] done processed={job.processed_pairs}/{job.total_pairs} options={len(all_options)}")
+
+    except Exception as e:
+        job.status = JobStatus.FAILED
+        job.error = f"job_crash: {type(e).__name__}: {e}"
+        print(f"[JOB {job_id}] FAILED {job.error}")
+
 # =====================================================================
 # SECTION END: IN MEMORY STORES
 # =====================================================================
@@ -3507,8 +3544,7 @@ def _peek_user_inflight(user_key: str):
 def _run_search_job_guarded(job_id: str, user_key: str):
     try:
         with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS, job_id=job_id):
-            # IMPORTANT: call the actual job runner function that exists in this file
-            _run_search_job(job_id)
+            run_search_job(job_id)
     except Exception as e:
         # Ensure UI does not poll forever
         try:
