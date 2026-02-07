@@ -3507,7 +3507,18 @@ def _peek_user_inflight(user_key: str):
 def _run_search_job_guarded(job_id: str, user_key: str):
     try:
         with _hard_runtime_cap(SEARCH_HARD_CAP_SECONDS, job_id=job_id):
-            run_search_job(job_id)
+            # IMPORTANT: call the actual job runner function that exists in this file
+            _run_search_job(job_id)
+    except Exception as e:
+        # Ensure UI does not poll forever
+        try:
+            job = JOBS.get(job_id)
+            if job:
+                job.status = JobStatus.FAILED
+                job.error = f"job_crash: {type(e).__name__}: {e}"
+        except Exception as _e:
+            print(f"[JOB {job_id}] FAILED status update failed: {_e}")
+        raise
     finally:
         try:
             job = JOBS.get(job_id)
