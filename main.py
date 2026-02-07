@@ -1949,15 +1949,37 @@ def map_ttn_offer_to_option(
         return None
 
     def _carrier_code(seg):
-        for k in ("marketingCarrier", "marketing_carrier", "carrier", "airline", "operatingCarrier", "operating_carrier"):
+        # Common TTN and generic keys for airline IATA code
+        for k in (
+            "marketingCarrier",
+            "marketing_carrier",
+            "carrier",
+            "airline",
+            "operatingCarrier",
+            "operating_carrier",
+            "airline_code",
+            "carrier_code",
+            "iata",
+            "iata_code",
+            "airline_iata",
+            "operating_airline",
+            "marketing_airline",
+        ):
             v = seg.get(k)
+
             if isinstance(v, str) and v.strip():
-                return v.strip().upper()
+                vv = v.strip().upper()
+                # Guard against values like "TK,TK"
+                if "," in vv:
+                    vv = vv.split(",")[0].strip()
+                return vv
+
             if isinstance(v, dict):
                 for kk in ("iata", "iata_code", "code"):
                     vv = v.get(kk)
                     if isinstance(vv, str) and vv.strip():
                         return vv.strip().upper()
+
         return None
 
     def _flight_number(seg):
@@ -2137,10 +2159,10 @@ def map_ttn_offer_to_option(
                     return_segments, in_min, in_first, in_last = _build_segments("return", segs)
                     total_duration_minutes += in_min
                     stops = max(stops, max(0, len(segs) - 1))
-                    if in_last:
-                        ret_date_str = in_last.date().isoformat()
-                    elif in_first:
+                    if in_first:
                         ret_date_str = in_first.date().isoformat()
+                    elif in_last:
+                        ret_date_str = in_last.date().isoformat()
                 try:
                     rd = int(r_in.get("route_duration") or 0)
                     if rd > 0 and in_min == 0:
@@ -2150,13 +2172,35 @@ def map_ttn_offer_to_option(
 
     duration_minutes = int(total_duration_minutes) if total_duration_minutes else 0
 
-    airline_name = (
-        offer.get("airline")
-        or offer.get("carrier")
-        or offer.get("validating_carrier")
-        or offer.get("validating_supplier")
-        or (airline_code if airline_code else "TTN")
-    )
+    # Derive airline codes from segments, collapse duplicates, keep order
+    def _unique_codes(seq):
+        seen = set()
+        out = []
+        for x in seq:
+            if not x:
+                continue
+            x = str(x).strip().upper()
+            if "," in x:
+                x = x.split(",")[0].strip()
+            if x and x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    outbound_codes = _unique_codes([s.get("marketingCarrier") for s in (outbound_segments or [])])
+    return_codes = _unique_codes([s.get("marketingCarrier") for s in (return_segments or [])])
+    all_codes = _unique_codes(outbound_codes + return_codes)
+
+    # Always set a stable airlineCode for filtering, prefer first outbound carrier
+    airline_code = (outbound_codes[0] if outbound_codes else (all_codes[0] if all_codes else None))
+
+    # Label: if single airline, use that code for now, else show combined
+    if len(all_codes) == 1:
+        airline_name = all_codes[0]
+    elif len(all_codes) > 1:
+        airline_name = " + ".join(all_codes[:2]) if len(all_codes) <= 2 else f"{all_codes[0]} + {len(all_codes)-1} more"
+    else:
+        airline_name = "TTN"
 
     return FlightOption(
         id=opt_id,
@@ -2180,8 +2224,8 @@ def map_ttn_offer_to_option(
         destination=str(destination),
         originAirport=str(origin),
         destinationAirport=str(destination),
-        stopoverCodes=stopover_codes or None,
-        stopoverAirports=stopover_airports or None,
+        stopoverCodes=list(dict.fromkeys(stopover_codes)) if stopover_codes else None,
+        stopoverAirports=list(dict.fromkeys(stopover_airports)) if stopover_airports else None,
         outboundSegments=outbound_segments or None,
         returnSegments=return_segments or None,
         aircraftCodes=aircraft_codes or None,
