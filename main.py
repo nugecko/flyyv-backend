@@ -677,7 +677,7 @@ def run_search_job(job_id: str) -> None:
 
             job.processed_pairs += 1
 
-        job.status = JobStatus.DONE
+        job.status = JobStatus.COMPLETED
         print(f"[JOB {job_id}] done processed={job.processed_pairs}/{job.total_pairs} options={len(all_options)}")
 
     except Exception as e:
