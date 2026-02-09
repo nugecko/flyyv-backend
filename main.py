@@ -2228,16 +2228,25 @@ def map_ttn_offer_to_option(
     return_codes = _unique_codes([s.get("marketingCarrier") for s in (return_segments or [])])
     all_codes = _unique_codes(outbound_codes + return_codes)
 
-    # Always set a stable airlineCode for filtering, prefer first outbound carrier
-    airline_code = (outbound_codes[0] if outbound_codes else (all_codes[0] if all_codes else None))
+        # Fallback: sometimes TTN does not include carrier fields per-segment
+    offer_level_code = _carrier_code(offer)
 
-    # Label: if single airline, use that code for now, else show combined
+    # Always set a stable airlineCode for filtering, prefer first outbound carrier, then offer-level
+    airline_code = (
+        outbound_codes[0]
+        if outbound_codes
+        else (all_codes[0] if all_codes else (offer_level_code or None))
+    )
+
+    # Label: if single airline, use that code, else show combined, else use offer-level, else TBC
     if len(all_codes) == 1:
         airline_name = all_codes[0]
     elif len(all_codes) > 1:
         airline_name = " + ".join(all_codes[:2]) if len(all_codes) <= 2 else f"{all_codes[0]} + {len(all_codes)-1} more"
+    elif offer_level_code:
+        airline_name = offer_level_code
     else:
-        airline_name = "TTN"
+        airline_name = "Airline TBC"
 
     return FlightOption(
         id=opt_id,
