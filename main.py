@@ -1986,7 +1986,7 @@ def map_ttn_offer_to_option(
         return None
 
     def _carrier_code(seg):
-        # Common TTN and generic keys for airline IATA code
+        # 1) Try explicit carrier fields (string or dict)
         for k in (
             "marketingCarrier",
             "marketing_carrier",
@@ -1999,14 +1999,16 @@ def map_ttn_offer_to_option(
             "iata",
             "iata_code",
             "airline_iata",
+            "airline_iata_code",
             "operating_airline",
             "marketing_airline",
+            "validatingCarrier",
+            "validating_carrier",
         ):
             v = seg.get(k)
 
             if isinstance(v, str) and v.strip():
                 vv = v.strip().upper()
-                # Guard against values like "TK,TK"
                 if "," in vv:
                     vv = vv.split(",")[0].strip()
                 return vv
@@ -2016,6 +2018,20 @@ def map_ttn_offer_to_option(
                     vv = v.get(kk)
                     if isinstance(vv, str) and vv.strip():
                         return vv.strip().upper()
+
+        # 2) Fallback: derive carrier from flight number like "TK1930" or "TK 1930"
+        fn = seg.get("flightNumber") or seg.get("flight_number") or seg.get("number")
+        if fn is not None:
+            s = str(fn).strip().upper()
+            # extract leading letters
+            prefix = []
+            for ch in s:
+                if ch.isalpha():
+                    prefix.append(ch)
+                else:
+                    break
+            if 2 <= len(prefix) <= 3:
+                return "".join(prefix)
 
         return None
 
@@ -2077,7 +2093,16 @@ def map_ttn_offer_to_option(
             o_name = _name_from(s, ["originAirport", "departure_airport_name", "departureAirport", "origin", "departure_airport"])
             d_name = _name_from(s, ["destinationAirport", "arrival_airport_name", "arrivalAirport", "destination", "arrival_airport"])
 
-            mkt = _carrier_code(s)
+            if i == 0 and direction == "outbound" and get_config_bool("TTN_DEBUG_SEGMENTS", False):
+                try:
+                    print(f"[ttn] segment_keys={sorted(list(s.keys()))}")
+                    import json as _json
+                    print(f"[ttn] segment_sample={_json.dumps(s, default=str)[:600]}")
+                except Exception:
+                    pass
+
+            mkt = _iata_from(s, ["marketingCarrier", "marketing_carrier", "marketing_airline", "carrier", "airline"]) or _carrier_code(s)
+            op = _iata_from(s, ["operatingCarrier", "operating_carrier", "operating_airline"])  # only if TTN provides it
             fn = _flight_number(s)
 
             seg_min = 0
@@ -2117,7 +2142,7 @@ def map_ttn_offer_to_option(
                     "direction": direction,
                     "flightNumber": fn,
                     "marketingCarrier": mkt,
-                    "operatingCarrier": None,
+                    "operatingCarrier": op,
                     "origin": o_code,
                     "destination": d_code,
                     "originAirport": o_name,
