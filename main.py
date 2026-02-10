@@ -2194,13 +2194,18 @@ def map_ttn_offer_to_option(
         out_min = 0
         if r_out:
             segs = r_out.get("segments")
-            if os.environ.get("TTN_DEBUG_SEGMENTS", "").lower() in ("1","true","yes","on"):
+            if os.environ.get("TTN_DEBUG_SEGMENTS", "").lower() in ("1", "true", "yes", "on"):
                 try:
                     print(f"[ttn] outbound segs type={type(segs).__name__} len={(len(segs) if hasattr(segs,'__len__') else 'n/a')}")
-                    if isinstance(segs, list) and segs:
+                    if isinstance(segs, list) and segs and isinstance(segs[0], dict):
+                        import json as _json
+                        print(f"[ttn] raw_out_seg_keys={sorted(list(segs[0].keys()))}")
+                        print(f"[ttn] raw_out_seg_sample={_json.dumps(segs[0], default=str)[:900]}")
+                    elif isinstance(segs, list) and segs:
                         print(f"[ttn] outbound seg[0] type={type(segs[0]).__name__}")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    print(f"[ttn] raw_out_seg_debug_failed: {_e}")
+
                     
             if isinstance(segs, list) and segs:
                 outbound_segments, out_min, out_first, out_last = _build_segments("outbound", segs)
