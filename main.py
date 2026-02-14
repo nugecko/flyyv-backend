@@ -110,6 +110,11 @@ except ImportError:
     except ImportError:
         AIRLINE_BOOKING_URL: Dict[str, str] = {}
 
+try:
+    from airlines import AIRCRAFT_NAMES  # type: ignore
+except ImportError:
+    AIRCRAFT_NAMES: Dict[str, str] = {}
+
 # =====================================================================
 # SECTION END: AIRLINES IMPORTS
 # =====================================================================
@@ -2045,6 +2050,21 @@ def map_ttn_offer_to_option(
     carrier_codes = []
     carrier_names = []
 
+    # Infer cabin class from TTN's top-level service_class field.
+    # TTN does not provide cabin at segment level, so we stamp the same
+    # value on every segment. Mapping: B -> BUSINESS, E -> ECONOMY, else None.
+    _sc = (offer.get("service_class") or offer.get("serviceClass") or "").strip().upper()
+    if _sc == "B":
+        _inferred_cabin = "BUSINESS"
+    elif _sc == "E":
+        _inferred_cabin = "ECONOMY"
+    elif _sc == "P":
+        _inferred_cabin = "PREMIUM_ECONOMY"
+    elif _sc == "F":
+        _inferred_cabin = "FIRST"
+    else:
+        _inferred_cabin = None
+
     def _build_segments(direction, segs):
         seg_out = []
         total_min = 0
@@ -2139,6 +2159,11 @@ def map_ttn_offer_to_option(
                 ac_code = s.get("aircraftCode") or s.get("aircraft_code")
                 ac_name = s.get("aircraftName") or s.get("aircraft_name")
 
+            # TTN returns ICAO equipment codes (e.g. "7M8", "789").
+            # Resolve to a human name using our local lookup table.
+            if ac_code and not ac_name:
+                ac_name = AIRCRAFT_NAMES.get(str(ac_code).strip().upper())
+
             if ac_code:
                 aircraft_codes.append(str(ac_code))
             if ac_name:
@@ -2163,7 +2188,10 @@ def map_ttn_offer_to_option(
                     "aircraftName": ac_name,
                     "durationMinutes": seg_min,
                     "layoverMinutesToNext": None,
-                    "cabin": None,
+                    # TTN does not provide cabin at segment level.
+                    # Infer from the top-level service_class passed in the search:
+                    # B=Business, E=Economy, A=all (leave as None if ambiguous)
+                    "cabin": _inferred_cabin,
                     "bookingCode": None,
                     "fareBrand": None,
                 }
