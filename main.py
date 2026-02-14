@@ -1499,6 +1499,11 @@ def fetch_direct_only_offers(
 
 
 def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
+    # -----------------------------------------------------------------
+    # DUFFEL SCAN (legacy / fallback path — TTN is primary)
+    # This function is retained for alert scanning fallback only.
+    # Do not call from /search-business unless TTN is unavailable.
+    # -----------------------------------------------------------------
     print(f"[search] run_duffel_scan START origin={params.origin} dest={params.destination}")
 
     # -----------------------------
@@ -1718,36 +1723,14 @@ def run_duffel_scan(params: SearchParams) -> List[FlightOption]:
 # SECTION END: SHARED SEARCH HELPERS
 # =====================================================================
 
-# ============================================================
-# ASYNC DATE-PAIR WORKER (CRITICAL)
-# ============================================================
-# This function is intentionally small and boring.
-#
-# WHY IT EXISTS:
-# - Async searches fan out into multiple date-pairs
-# - Each date-pair must behave exactly like a normal
-#   single-pair Duffel search
-# - We MUST NOT share SearchParams across threads
-#
-# DO NOT:
-# - Call Duffel directly here
-# - Re-implement filtering, curation, or airline caps
-# - Mutate the original params object
-#
-# WHAT THIS FUNCTION DOES:
-# 1. Clone SearchParams for a single dep/ret pair
-# 2. Force the search into single-pair mode
-# 3. Call the existing sync pipeline (run_duffel_scan)
-# 4. Return raw FlightOption results for this pair
-#
-# WHY THIS DESIGN:
-# - Keeps async and sync logic identical
-# - Prevents thread safety bugs
-# - Allows cancellation by killing the executor
-#
-# If async jobs hang or behave differently from sync,
-# this function is the FIRST place to check.
-# ============================================================
+# =====================================================================
+# SECTION START: ASYNC DATE-PAIR WORKER
+# Each async search fans out into per-pair workers.
+# This function must stay small: clone params, call TTN scan, return results.
+# Do NOT call Duffel directly here, do NOT re-implement filters or caps,
+# do NOT mutate the original params object.
+# If async jobs hang or differ from sync, check here first.
+# =====================================================================
 def process_date_pair_offers(
     params: SearchParams,
     dep: date,
@@ -1794,17 +1777,16 @@ def process_date_pair_offers(
         print(f"[pair_worker] TTN error dep={dep} ret={ret}: {e}")
         return []
 
-# ============================================================
-# END - ASYNC DATE-PAIR WORKER (CRITICAL)
-# ============================================================
+# =====================================================================
+# SECTION END: ASYNC DATE-PAIR WORKER
+# =====================================================================
 
-# ============================================================
-# TTN API HELPERS (probe-only)
-# Notes:
-# - TTN expects query parameter named "key" for auth.
-# - /avia/search is GET-only, use /avia/search.json to get JSON.
-# - For now: probe mode plus minimal mapping, returns up to 3 FlightOptions.
-# ============================================================
+# =====================================================================
+# SECTION START: TTN API HELPERS
+# =====================================================================
+# TTN expects query parameter "key" for auth.
+# /avia/search is GET-only; use /avia/search.json for JSON.
+# =====================================================================
 
 TTN_BASE_URL = "https://v2.api.tickets.ua"
 
@@ -1875,6 +1857,14 @@ def ttn_post(path: str, payload: dict, params: Optional[dict] = None) -> dict:
         )
 
     return res.json()
+
+# =====================================================================
+# SECTION END: TTN API HELPERS
+# =====================================================================
+
+# =====================================================================
+# SECTION START: TTN OFFER MAPPING
+# =====================================================================
 
 def map_ttn_offer_to_option(
     offer: dict,
@@ -2052,6 +2042,8 @@ def map_ttn_offer_to_option(
     stopover_airports = []
     aircraft_codes = []
     aircraft_names = []
+    carrier_codes = []
+    carrier_names = []
 
     def _build_segments(direction, segs):
         seg_out = []
@@ -2101,8 +2093,26 @@ def map_ttn_offer_to_option(
                 except Exception:
                     pass
 
-            mkt = _iata_from(s, ["marketingCarrier", "marketing_carrier", "marketing_airline", "carrier", "airline"]) or _carrier_code(s)
-            op = _iata_from(s, ["operatingCarrier", "operating_carrier", "operating_airline"])  # only if TTN provides it
+            # TTN carrier fields:
+            # - supplier_code: IATA code (e.g. "TK")
+            # - supplier: airline name (e.g. "Turkish Airlines")
+            # - operating_supplier_code: IATA (often same as supplier_code)
+            mkt_code = _iata_from(s, ["supplier_code", "supplierCode", "marketingCarrier", "marketing_carrier", "carrier", "airline"]) or _carrier_code(s)
+            op_code = _iata_from(s, ["operating_supplier_code", "operatingSupplierCode", "operatingCarrier", "operating_carrier"]) or mkt_code
+
+            mkt_name = _name_from(s, ["supplier", "marketingCarrierName", "marketing_carrier_name", "airline_name"])
+            op_name = _name_from(s, ["supplier", "operatingCarrierName", "operating_carrier_name", "airline_name"])
+
+            # Collect codes and names for top-level airline derivation
+            if mkt_code:
+                carrier_codes.append(mkt_code)
+            if mkt_name:
+                carrier_names.append(mkt_name)
+
+            # Segment display: prefer human name, fall back to code
+            mkt = mkt_name or mkt_code
+            op = op_name or op_code
+
             fn = _flight_number(s)
 
             seg_min = 0
@@ -2247,7 +2257,10 @@ def map_ttn_offer_to_option(
 
     duration_minutes = int(total_duration_minutes) if total_duration_minutes else 0
 
-    # Derive airline codes from segments, collapse duplicates, keep order
+    # -------------------------
+    # Airline code and name derivation
+    # Reads from carrier_codes / carrier_names collected in _build_segments.
+    # -------------------------
     def _unique_codes(seq):
         seen = set()
         out = []
@@ -2262,22 +2275,30 @@ def map_ttn_offer_to_option(
                 out.append(x)
         return out
 
-    outbound_codes = _unique_codes([s.get("marketingCarrier") for s in (outbound_segments or [])])
-    return_codes = _unique_codes([s.get("marketingCarrier") for s in (return_segments or [])])
-    all_codes = _unique_codes(outbound_codes + return_codes)
+    all_codes = _unique_codes(carrier_codes)
 
-        # Fallback: sometimes TTN does not include carrier fields per-segment
+    # De-duplicate names, preserving order
+    all_names = []
+    seen_names: set = set()
+    for n in carrier_names:
+        if not n:
+            continue
+        nn = str(n).strip()
+        if nn and nn not in seen_names:
+            seen_names.add(nn)
+            all_names.append(nn)
+
+    # Fallback: offer-level carrier code if segments gave nothing
     offer_level_code = _carrier_code(offer)
 
-    # Always set a stable airlineCode for filtering, prefer first outbound carrier, then offer-level
-    airline_code = (
-        outbound_codes[0]
-        if outbound_codes
-        else (all_codes[0] if all_codes else (offer_level_code or None))
-    )
+    airline_code = all_codes[0] if all_codes else (offer_level_code or None)
 
-    # Label: if single airline, use that code, else show combined, else use offer-level, else TBC
-    if len(all_codes) == 1:
+    # Prefer human name(s) for display; fall back to code(s); last resort "Airline TBC"
+    if len(all_names) == 1:
+        airline_name = all_names[0]
+    elif len(all_names) > 1:
+        airline_name = " + ".join(all_names[:2]) if len(all_names) <= 2 else f"{all_names[0]} + {len(all_names)-1} more"
+    elif len(all_codes) == 1:
         airline_name = all_codes[0]
     elif len(all_codes) > 1:
         airline_name = " + ".join(all_codes[:2]) if len(all_codes) <= 2 else f"{all_codes[0]} + {len(all_codes)-1} more"
@@ -2317,6 +2338,14 @@ def map_ttn_offer_to_option(
         bookingUrl=None,
         url=None,
     )
+
+# =====================================================================
+# SECTION END: TTN OFFER MAPPING
+# =====================================================================
+
+# =====================================================================
+# SECTION START: TTN SCAN
+# =====================================================================
 
 def run_ttn_scan(
     params: SearchParams,
@@ -2581,6 +2610,10 @@ def run_ttn_scan(
     except Exception as e:
         print(f"[ttn] mapping_block_failed err={type(e).__name__}: {e}")
         return []
+
+# =====================================================================
+# SECTION END: TTN SCAN
+# =====================================================================
 
 # =====================================================================
 # SECTION START: PRICE WATCH HELPERS
@@ -3502,7 +3535,7 @@ def trigger_daily_alert(background_tasks: BackgroundTasks):
 # =====================================================================
 
 # =====================================================================
-# SECTION START: MAIN SEARCH ROUTES
+# SECTION START: TTN BOOK AND CHECKOUT ROUTES
 # =====================================================================
 
 # ---- Guardrails (in-memory, single-process) ----
@@ -3852,6 +3885,14 @@ def ttn_checkout_link(payload: TTNCheckoutLinkRequest):
         "checkout_url": redirect_result["checkout_url"],
         "redirect_path": redirect_result.get("path"),
     }
+
+# =====================================================================
+# SECTION END: TTN BOOK AND CHECKOUT ROUTES
+# =====================================================================
+
+# =====================================================================
+# SECTION START: MAIN SEARCH ROUTES
+# =====================================================================
 
 @app.post("/search-business")
 def search_business(params: SearchParams, background_tasks: BackgroundTasks):
