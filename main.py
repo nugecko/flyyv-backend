@@ -2599,7 +2599,7 @@ def run_ttn_scan(
         mapped: List[FlightOption] = []
         attempted = 0
 
-        max_per_pair = int(get_admin_config("MAX_OFFERS_PER_PAIR", 20))
+        max_per_pair = int(os.getenv("MAX_OFFERS_PER_PAIR", "20"))
         for r0 in recs:
             if len(mapped) >= max_per_pair:
                 break
