@@ -3200,9 +3200,23 @@ def process_alert(alert: Alert, db: Session) -> None:
                 except Exception:
                     pass
 
-            currency = params_payload.get("currency") or "GBP"
+            # Snapshot currency and best price must be consistent with the top_results payload.
+            # Prefer the cheapest option's currency and price_per_pax, fall back to params, then GBP.
+            cheapest_dict = top_results[0] if isinstance(top_results, list) and top_results else {}
 
-            best_price_val = _to_float(current_price)
+            cheapest_currency = None
+            if isinstance(cheapest_dict, dict):
+                cheapest_currency = cheapest_dict.get("currency")
+
+            currency = cheapest_currency or params_payload.get("currency") or "GBP"
+
+            best_price_val = None
+            if isinstance(cheapest_dict, dict):
+                best_price_val = _to_float(cheapest_dict.get("price_per_pax"))
+
+            if best_price_val is None:
+                best_price_val = _to_float(current_price)
+
             best_price_int = int(round(best_price_val)) if best_price_val is not None else None
 
             db.execute(
