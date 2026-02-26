@@ -167,7 +167,8 @@ def map_ttn_offer_to_option(
     def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
         if not dt_str:
             return None
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        # TTN format is DD.MM.YYYY HH:MM — try this first, then ISO fallbacks
+        for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
             try:
                 return datetime.strptime(dt_str, fmt)
             except Exception:
@@ -176,7 +177,16 @@ def map_ttn_offer_to_option(
 
     def _process_route(route: dict, direction: str, idx: int) -> Tuple[List[Dict[str, Any]], int]:
         segs_out = []
+        # TTN provides route_duration in minutes at the route level — use it if present
         total_mins = 0
+        route_level_duration = None
+        if isinstance(route, dict):
+            rd = route.get("route_duration")
+            if rd is not None:
+                try:
+                    route_level_duration = int(float(rd))
+                except Exception:
+                    pass
 
         # TTN routes can be dicts or lists
         segments = []
@@ -195,8 +205,9 @@ def map_ttn_offer_to_option(
             dep_iata = seg.get("departure_airport") or seg.get("from") or seg.get("origin") or ""
             arr_iata = seg.get("arrival_airport") or seg.get("to") or seg.get("destination") or ""
 
-            dep_at = seg.get("departure_date") or seg.get("departure_datetime") or seg.get("dep_date") or ""
-            arr_at = seg.get("arrival_date") or seg.get("arrival_datetime") or seg.get("arr_date") or ""
+            # TTN uses departure_time / arrival_time in DD.MM.YYYY HH:MM format
+            dep_at = seg.get("departure_time") or seg.get("departure_date") or seg.get("departure_datetime") or seg.get("dep_date") or ""
+            arr_at = seg.get("arrival_time") or seg.get("arrival_date") or seg.get("arrival_datetime") or seg.get("arr_date") or ""
 
             dep_dt = _parse_datetime(dep_at)
             arr_dt = _parse_datetime(arr_at)
@@ -232,8 +243,8 @@ def map_ttn_offer_to_option(
             if layover_mins:
                 total_mins += layover_mins
 
-            # Airline
-            carrier_code = seg.get("airline_code") or seg.get("carrier") or seg.get("marketing_carrier") or ""
+            # Airline — TTN segments use 'airline' field
+            carrier_code = seg.get("airline") or seg.get("airline_code") or seg.get("carrier") or seg.get("marketing_carrier") or ""
             if carrier_code:
                 all_airline_codes.append(carrier_code)
 
@@ -279,7 +290,7 @@ def map_ttn_offer_to_option(
                 "fareBrand": seg.get("fare_brand") or seg.get("fare_basis"),
             })
 
-        return segs_out, total_mins
+        return segs_out, route_level_duration if route_level_duration is not None else total_mins
 
     for r_idx, route in enumerate(routes if isinstance(routes, list) else []):
         direction = "outbound" if r_idx == 0 else "return"
@@ -292,8 +303,8 @@ def map_ttn_offer_to_option(
             return_total_minutes = total_mins
 
     # ---- Airline resolution ----
-    # TTN sets a top-level airline_code or carrier on the recommendation
-    top_carrier = offer.get("airline_code") or offer.get("carrier") or offer.get("validating_carrier") or ""
+    # TTN uses validating_supplier at the recommendation level for the airline code
+    top_carrier = offer.get("validating_supplier") or offer.get("airline_code") or offer.get("carrier") or ""
     if not top_carrier and all_airline_codes:
         top_carrier = all_airline_codes[0]
 
