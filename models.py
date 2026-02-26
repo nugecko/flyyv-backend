@@ -16,7 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from db import Base
 
@@ -156,3 +156,64 @@ class AlertRun(Base):
     price_found = Column(Integer, nullable=True)
     sent = Column(Boolean, nullable=False, default=False)
     reason = Column(Text, nullable=True)
+
+
+# =======================================
+# SECTION: SEARCH JOB PERSISTENCE
+# Replaces in-memory JOBS / JOB_RESULTS.
+# Survives container restarts.
+# =======================================
+
+class SearchJob(Base):
+    __tablename__ = "search_jobs"
+
+    id = Column(String(255), primary_key=True, index=True)
+    status = Column(String(50), nullable=False, default="pending")  # pending|running|completed|failed|cancelled
+    params_json = Column(JSONB, nullable=False)
+    total_pairs = Column(Integer, nullable=False, default=0)
+    processed_pairs = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SearchResult(Base):
+    __tablename__ = "search_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    job_id = Column(String(255), ForeignKey("search_jobs.id"), nullable=False, index=True)
+    offer_json = Column(JSONB, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+# =======================================
+# SECTION: CLICK TRACKING
+# Logs every outbound booking click for analytics.
+# =======================================
+
+class OfferClick(Base):
+    __tablename__ = "offer_clicks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    clicked_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    user_external_id = Column(String(255), nullable=True, index=True)
+    offer_id = Column(String(512), nullable=True)
+    airline_code = Column(String(10), nullable=True)
+    price = Column(Numeric(10, 2), nullable=True)
+    currency = Column(String(10), nullable=True)
+    origin = Column(String(10), nullable=True)
+    destination = Column(String(10), nullable=True)
+    departure_date = Column(Date, nullable=True)
+    return_date = Column(Date, nullable=True)
+    cabin = Column(String(50), nullable=True)
+    stops = Column(Integer, nullable=True)
+
+    # "search" | "alert_email" | "preview"
+    source = Column(String(50), nullable=True)
+    job_id = Column(String(255), nullable=True)
+    alert_id = Column(String(255), nullable=True)
+
+    destination_url = Column(Text, nullable=True)
+    provider = Column(String(50), nullable=False, default="ttn")
+    redirect_followed = Column(Boolean, nullable=False, default=True)
