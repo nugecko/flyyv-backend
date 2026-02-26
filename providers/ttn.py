@@ -274,7 +274,7 @@ def map_ttn_offer_to_option(
                 "direction": direction,
                 "flightNumber": seg.get("flight_number") or seg.get("number") or "",
                 "marketingCarrier": carrier_code,
-                "operatingCarrier": seg.get("operating_carrier") or carrier_code,
+                "operatingCarrier": seg.get("operating_carrier") or None,
                 "origin": dep_iata,
                 "destination": arr_iata,
                 "originAirport": seg.get("departure_airport_name") or "",
