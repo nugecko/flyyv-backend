@@ -346,7 +346,35 @@ def run_flightapi_scan(
     ck = _cache_key(origin, destination, dep_str, ret_str, cabin, pax, currency)
     cached = _cache_get(ck)
     if cached is not None:
-        return cached
+        # Re-map from raw data so UI/mapping changes are always reflected
+        raw_data = cached.get("raw")
+        if raw_data:
+            print(f"[flightapi] cache HIT — re-mapping from raw data key={ck}")
+            places_map, carriers_map, segments_map = _build_lookup_maps(raw_data)
+            legs_map = _build_legs_map(raw_data)
+            itineraries = raw_data.get("itineraries") or []
+            max_results = int(os.getenv("MAX_OFFERS_PER_PAIR", "20"))
+            remapped = []
+            for itin in itineraries:
+                if len(remapped) >= max_results:
+                    break
+                try:
+                    opt = _map_itinerary_to_option(
+                        itin=itin,
+                        legs_map=legs_map,
+                        segments_map=segments_map,
+                        places_map=places_map,
+                        carriers_map=carriers_map,
+                        passengers=pax,
+                        currency=currency,
+                        dep_date=dep,
+                        ret_date=ret,
+                    )
+                    if opt:
+                        remapped.append(opt)
+                except Exception as e:
+                    continue
+            return remapped
 
     url = (
         f"{FLIGHTAPI_BASE_URL}/roundtrip"
@@ -421,7 +449,8 @@ def run_flightapi_scan(
     else:
         print("[flightapi] mapped=0")
 
-    # Store in cache regardless (even empty results, to avoid hammering on no-result routes)
-    _cache_set(ck, mapped)
+    # Cache the raw API data, not the mapped results
+    # This means UI/mapping changes are always reflected without clearing cache
+    _cache_set(ck, {"raw": data})
 
     return mapped
