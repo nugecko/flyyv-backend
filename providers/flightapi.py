@@ -27,6 +27,27 @@ except ImportError:
 FLIGHTAPI_BASE_URL = "https://api.flightapi.io"
 SKYSCANNER_BASE = "https://www.skyscanner.com"
 
+# In-memory cache: avoids burning credits on duplicate searches within TTL window
+_SEARCH_CACHE: Dict[str, Any] = {}
+
+def _cache_key(origin, destination, dep_str, ret_str, cabin, pax, currency) -> str:
+    return f"{origin}|{destination}|{dep_str}|{ret_str}|{cabin}|{pax}|{currency}"
+
+def _cache_get(key: str):
+    entry = _SEARCH_CACHE.get(key)
+    if not entry:
+        return None
+    if datetime.utcnow() > entry["expires_at"]:
+        del _SEARCH_CACHE[key]
+        return None
+    print(f"[flightapi] cache HIT key={key}")
+    return entry["results"]
+
+def _cache_set(key: str, results: list) -> None:
+    ttl = int(os.getenv("FLIGHTAPI_CACHE_TTL_SECONDS", "1800"))
+    _SEARCH_CACHE[key] = {"results": results, "expires_at": datetime.utcnow() + timedelta(seconds=ttl)}
+
+
 
 def _get_api_key() -> str:
     key = os.getenv("FLIGHTAPI_KEY", "").strip()
@@ -321,6 +342,12 @@ def run_flightapi_scan(
     dep_str = dep.strftime("%Y-%m-%d")
     ret_str = ret.strftime("%Y-%m-%d")
 
+    # Check cache first to avoid burning credits on repeated identical searches
+    ck = _cache_key(origin, destination, dep_str, ret_str, cabin, pax, currency)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
+
     url = (
         f"{FLIGHTAPI_BASE_URL}/roundtrip"
         f"/{api_key}/{origin}/{destination}"
@@ -393,5 +420,8 @@ def run_flightapi_scan(
         print(f"[flightapi] mapped={len(mapped)} first_airline={o0.airline} first_price={o0.price} {o0.currency} deeplink={'YES' if o0.url else 'NO'}")
     else:
         print("[flightapi] mapped=0")
+
+    # Store in cache regardless (even empty results, to avoid hammering on no-result routes)
+    _cache_set(ck, mapped)
 
     return mapped
