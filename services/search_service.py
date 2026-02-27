@@ -385,8 +385,8 @@ def process_date_pair_offers(
     Fetch offers for exactly one (dep, ret) pair via the active provider.
     Called by the async job runner in a thread pool.
     """
-    per_pair_limit = int(max_offers_pair) if max_offers_pair else 20
-    per_pair_limit = max(1, min(per_pair_limit, 50))
+    per_pair_limit = int(max_offers_pair) if max_offers_pair else 50
+    per_pair_limit = max(1, min(per_pair_limit, 200))  # raised from 50 — Duffel returns high-quality results
 
     try:
         scan_params = SearchParams(**params.model_dump())
