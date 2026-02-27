@@ -206,7 +206,7 @@ def track_email_click(
         db.close()
 
 
-
+def _mark_followed(click_id: str) -> None:
     """Best-effort: mark redirect_followed=True in DB."""
     db = SessionLocal()
     try:
