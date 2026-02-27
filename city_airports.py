@@ -10,7 +10,7 @@ When a user searches NYC, we search JFK + EWR + LGA and merge.
 
 CITY_AIRPORTS = {
     # UK
-    "LON": ["LHR", "LGW", "LTN", "STN", "LCY"],
+    "LON": ["LHR", "LGW", "LCY", "STN", "LTN"],  # ordered by relevance for Business Class
     "MAN": ["MAN"],
     "BHX": ["BHX"],
     # Europe
@@ -35,7 +35,7 @@ CITY_AIRPORTS = {
     "AUH": ["AUH"],
     # North America
     "NYC": ["JFK", "EWR", "LGA"],
-    "LON": ["LHR", "LGW", "LTN", "STN", "LCY"],
+    "LON": ["LHR", "LGW", "LCY", "STN", "LTN"],  # ordered by relevance for Business Class
     "LAX": ["LAX", "BUR", "LGB", "ONT", "SNA"],
     "CHI": ["ORD", "MDW"],
     "MIA": ["MIA", "FLL"],
