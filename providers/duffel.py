@@ -611,7 +611,7 @@ def run_duffel_scan(
         "data": {
             "slices": slices,
             "passengers": pax,
-            "cabin_class": cabin.lower().replace("_", " ") if cabin == "PREMIUM_ECONOMY" else cabin.lower(),
+            "cabin_class": cabin.lower(),  # Duffel expects: economy, premium_economy, business, first
         }
     }
     if max_connections is not None:
