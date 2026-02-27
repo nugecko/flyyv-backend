@@ -24,6 +24,11 @@ try:
 except ImportError:
     AIRLINE_NAMES: Dict[str, str] = {}
 
+try:
+    from city_airports import get_airports_for_code
+except ImportError:
+    def get_airports_for_code(code): return [code]
+
 FLIGHTAPI_BASE_URL = "https://api.flightapi.io"
 SKYSCANNER_BASE = "https://www.skyscanner.com"
 
@@ -303,6 +308,33 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     )
 
 
+def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int, pax, currency, dep, ret) -> None:
+    """Map raw FlightAPI response into results list, deduplicating by offer id."""
+    places_map, carriers_map, segments_map = _build_lookup_maps(data)
+    legs_map = _build_legs_map(data)
+    itineraries = data.get("itineraries") or []
+    for itin in itineraries:
+        if len(results) >= max_results:
+            break
+        try:
+            opt = _map_itinerary_to_option(
+                itin=itin,
+                legs_map=legs_map,
+                segments_map=segments_map,
+                places_map=places_map,
+                carriers_map=carriers_map,
+                passengers=pax,
+                currency=currency,
+                dep_date=dep,
+                ret_date=ret,
+            )
+            if opt and opt.id not in seen_ids:
+                seen_ids.add(opt.id)
+                results.append(opt)
+        except Exception as e:
+            continue
+
+
 def run_flightapi_scan(
     params: SearchParams,
     dep_override: Optional[date] = None,
@@ -376,81 +408,80 @@ def run_flightapi_scan(
                     continue
             return remapped
 
-    url = (
-        f"{FLIGHTAPI_BASE_URL}/roundtrip"
-        f"/{api_key}/{origin}/{destination}"
-        f"/{dep_str}/{ret_str}"
-        f"/{pax}/0/0/{cabin}/{currency}"
-    )
+    # Expand city codes to individual airports (e.g. LON -> LHR, LGW, LTN)
+    origin_airports = get_airports_for_code(origin)
+    destination_airports = get_airports_for_code(destination)
+    airport_pairs = [(o, d) for o in origin_airports for d in destination_airports]
 
-    print(f"[flightapi] GET roundtrip origin={origin} dest={destination} dep={dep_str} ret={ret_str} cabin={cabin} pax={pax} currency={currency}")
+    # Cap airport pairs to avoid credit explosion: max 3 origin airports x 1 destination
+    # For most routes destination is a single airport (TLV, DXB etc)
+    max_airport_pairs = int(os.getenv("FLIGHTAPI_MAX_AIRPORT_PAIRS", "3"))
+    airport_pairs = airport_pairs[:max_airport_pairs]
 
-    try:
-        resp = requests.get(url, timeout=45)
-    except Exception as e:
-        print(f"[flightapi] request failed: {e}")
-        return []
+    print(f"[flightapi] multi-airport search: {origin}->{destination} expands to {len(airport_pairs)} pairs: {airport_pairs}")
 
-    if resp.status_code == 429:
-        print("[flightapi] *** CREDIT LIMIT HIT (429) — upgrade your plan at api.flightapi.io ***")
-        return []
+    max_results = int(os.getenv("MAX_OFFERS_PER_PAIR", "10"))
+    all_mapped: List[FlightOption] = []
+    seen_ids = set()
 
-    if resp.status_code >= 400:
-        print(f"[flightapi] error {resp.status_code}: {resp.text[:500]}")
-        return []
+    for (orig_ap, dest_ap) in airport_pairs:
+        ap_ck = _cache_key(orig_ap, dest_ap, dep_str, ret_str, cabin, pax, currency)
+        ap_cached = _cache_get(ap_ck)
 
-    try:
-        data = resp.json()
-    except Exception as e:
-        print(f"[flightapi] JSON parse failed: {e}")
-        return []
-
-    if not isinstance(data, dict):
-        print(f"[flightapi] unexpected response type: {type(data)}")
-        return []
-
-    itineraries = data.get("itineraries") or []
-    print(f"[flightapi] itineraries={len(itineraries)} legs={len(data.get('legs', []))} segments={len(data.get('segments', []))} places={len(data.get('places', []))} carriers={len(data.get('carriers', []))}")
-
-    if not itineraries:
-        print("[flightapi] no itineraries returned")
-        return []
-
-    places_map, carriers_map, segments_map = _build_lookup_maps(data)
-    legs_map = _build_legs_map(data)
-
-    mapped: List[FlightOption] = []
-    max_results = int(os.getenv("MAX_OFFERS_PER_PAIR", "20"))
-
-    for itin in itineraries:
-        if len(mapped) >= max_results:
-            break
-        try:
-            opt = _map_itinerary_to_option(
-                itin=itin,
-                legs_map=legs_map,
-                segments_map=segments_map,
-                places_map=places_map,
-                carriers_map=carriers_map,
-                passengers=pax,
-                currency=currency,
-                dep_date=dep,
-                ret_date=ret,
-            )
-            if opt:
-                mapped.append(opt)
-        except Exception as e:
-            print(f"[flightapi] map_failed: {type(e).__name__}: {e}")
+        if ap_cached is not None:
+            raw_data = ap_cached.get("raw")
+            if raw_data:
+                print(f"[flightapi] cache HIT {orig_ap}->{dest_ap}")
+                _process_raw_into(raw_data, all_mapped, seen_ids, max_results, pax, currency, dep, ret)
             continue
+
+        url = (
+            f"{FLIGHTAPI_BASE_URL}/roundtrip"
+            f"/{api_key}/{orig_ap}/{dest_ap}"
+            f"/{dep_str}/{ret_str}"
+            f"/{pax}/0/0/{cabin}/{currency}"
+        )
+        print(f"[flightapi] GET roundtrip {orig_ap}->{dest_ap} dep={dep_str} ret={ret_str} cabin={cabin}")
+
+        try:
+            resp = requests.get(url, timeout=45)
+        except Exception as e:
+            print(f"[flightapi] request failed {orig_ap}->{dest_ap}: {e}")
+            continue
+
+        if resp.status_code == 429:
+            print("[flightapi] *** CREDIT LIMIT HIT (429) — upgrade plan at api.flightapi.io ***")
+            break
+
+        if resp.status_code >= 400:
+            print(f"[flightapi] error {resp.status_code} {orig_ap}->{dest_ap}: {resp.text[:300]}")
+            continue
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"[flightapi] JSON parse failed {orig_ap}->{dest_ap}: {e}")
+            continue
+
+        if not isinstance(data, dict):
+            continue
+
+        itineraries = data.get("itineraries") or []
+        print(f"[flightapi] {orig_ap}->{dest_ap} itineraries={len(itineraries)}")
+
+        if itineraries:
+            _cache_set(ap_ck, {"raw": data})
+            _process_raw_into(data, all_mapped, seen_ids, max_results, pax, currency, dep, ret)
+
+    # Sort merged results by price ascending
+    all_mapped.sort(key=lambda x: x.price)
+
+    mapped = all_mapped[:max_results]
 
     if mapped:
         o0 = mapped[0]
-        print(f"[flightapi] mapped={len(mapped)} first_airline={o0.airline} first_price={o0.price} {o0.currency} deeplink={'YES' if o0.url else 'NO'}")
+        print(f"[flightapi] final mapped={len(mapped)} cheapest={o0.price} {o0.currency} airline={o0.airline} deeplink={'YES' if o0.url else 'NO'}")
     else:
         print("[flightapi] mapped=0")
-
-    # Cache the raw API data, not the mapped results
-    # This means UI/mapping changes are always reflected without clearing cache
-    _cache_set(ck, {"raw": data})
 
     return mapped
