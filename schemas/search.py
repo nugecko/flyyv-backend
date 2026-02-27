@@ -101,6 +101,7 @@ class FlightOption(BaseModel):
 
     bookingUrl: Optional[str] = None
     url: Optional[str] = None
+    bookingUrls: Optional[dict] = None  # {"skyscanner": "...", "kayak": "...", "airline": "..." or None, "price": float, "currency": str}
 
 
 class SearchStartResponse(BaseModel):

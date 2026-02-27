@@ -641,15 +641,39 @@ def run_duffel_scan(
 
     print(f"[duffel] offers={len(offers_json)}")
 
-    # Build Skyscanner URL once for this route/date/cabin
-    sky_url = build_skyscanner_url(origin, destination, dep, ret, cabin, passengers)
+    # Import booking URL builder
+    try:
+        from airline_search_urls import get_booking_urls
+    except ImportError:
+        get_booking_urls = None
 
     results: List[FlightOption] = []
     for offer in offers_json:
         try:
             opt = map_duffel_offer_to_option(offer, dep, ret, passengers=passengers)
-            # Override booking URL with Skyscanner deep link
-            opt = opt.model_copy(update={"bookingUrl": sky_url, "url": sky_url})
+
+            # Build all three booking URLs for this specific result
+            if get_booking_urls:
+                booking_data = get_booking_urls(
+                    airline_code=opt.airlineCode or "",
+                    origin=origin,
+                    destination=destination,
+                    dep_date=dep,
+                    ret_date=ret,
+                    cabin=cabin,
+                    passengers=passengers,
+                    price=opt.price,
+                    currency=opt.currency,
+                )
+                opt = opt.model_copy(update={
+                    "url": booking_data["skyscanner"],
+                    "bookingUrl": booking_data["airline"] or booking_data["skyscanner"],
+                    "bookingUrls": booking_data,
+                })
+            else:
+                sky_url = build_skyscanner_url(origin, destination, dep, ret, cabin, passengers)
+                opt = opt.model_copy(update={"bookingUrl": sky_url, "url": sky_url})
+
             results.append(opt)
         except Exception as e:
             print(f"[duffel] map error: {e}")
