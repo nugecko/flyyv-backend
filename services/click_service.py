@@ -138,7 +138,75 @@ def follow_click(click_id: str) -> Optional[str]:
     return None
 
 
-def _mark_followed(click_id: str) -> None:
+def track_email_click(
+    destination_url: str,
+    src: str = "email",
+    alert_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    airline_code: Optional[str] = None,
+    origin: Optional[str] = None,
+    destination_iata: Optional[str] = None,
+    departure_date: Optional[str] = None,
+    return_date: Optional[str] = None,
+    cabin: Optional[str] = None,
+    passengers: Optional[int] = None,
+    price: Optional[float] = None,
+) -> None:
+    """
+    Best-effort click log for email tracking links (GET /go).
+    Writes to OfferClick table. Never raises — email redirect must always succeed.
+    """
+    click_id = str(uuid4())
+
+    dep_date = None
+    ret_date = None
+    try:
+        if departure_date:
+            dep_date = date.fromisoformat(departure_date)
+    except Exception:
+        pass
+    try:
+        if return_date:
+            ret_date = date.fromisoformat(return_date)
+    except Exception:
+        pass
+
+    db = SessionLocal()
+    try:
+        click = OfferClick(
+            id=click_id,
+            clicked_at=datetime.utcnow(),
+            user_external_id=None,
+            offer_id=run_id,          # reuse offer_id field for run_id context
+            airline_code=airline_code,
+            price=price,
+            currency="GBP",
+            origin=origin,
+            destination=destination_iata,
+            departure_date=dep_date,
+            return_date=ret_date,
+            cabin=cabin,
+            stops=None,
+            source=src,
+            job_id=None,
+            alert_id=alert_id,
+            destination_url=destination_url,
+            provider=src or "email",
+            redirect_followed=True,
+        )
+        db.add(click)
+        db.commit()
+    except Exception as e:
+        print(f"[click] email track write failed click_id={click_id}: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+
     """Best-effort: mark redirect_followed=True in DB."""
     db = SessionLocal()
     try:
