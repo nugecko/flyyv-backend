@@ -39,6 +39,10 @@ def run_provider_scan(
         from providers.flightapi import run_flightapi_scan
         return run_flightapi_scan(params, dep_override=dep_override, ret_override=ret_override)
 
+    if provider == "duffel":
+        from providers.duffel import run_duffel_scan
+        return run_duffel_scan(params, dep_override=dep_override, ret_override=ret_override)
+
     # Default: TTN
     from providers.ttn import run_ttn_scan
     return run_ttn_scan(params, dep_override=dep_override, ret_override=ret_override)

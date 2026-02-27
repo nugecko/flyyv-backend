@@ -525,3 +525,138 @@ def fetch_direct_only_offers(
 
     print(f"[direct_only] fetched {len(results)} direct offers")
     return results
+
+
+# =====================================================================
+# SECTION: SKYSCANNER URL BUILDER
+# =====================================================================
+
+def build_skyscanner_url(
+    origin: str,
+    destination: str,
+    dep_date: date,
+    ret_date: date,
+    cabin: str,
+    passengers: int,
+) -> str:
+    """
+    Build a Skyscanner search URL from route parameters.
+    Opens a pre-filtered Business Class search for the exact route and dates.
+    """
+    cabin_map = {
+        "BUSINESS": "business",
+        "FIRST": "first",
+        "PREMIUM_ECONOMY": "premiumeconomy",
+        "ECONOMY": "economy",
+    }
+    cabin_val = cabin_map.get((cabin or "").upper().replace(" ", "_"), "business")
+    dep_str = dep_date.strftime("%Y%m%d") if dep_date else ""
+    ret_str = ret_date.strftime("%Y%m%d") if ret_date else ""
+    pax = max(1, int(passengers or 1))
+
+    return (
+        f"https://www.skyscanner.com/transport/flights"
+        f"/{origin}/{destination}/{dep_str}/{ret_str}"
+        f"/?adults={pax}&cabinclass={cabin_val}&ref=flyyv"
+    )
+
+
+# =====================================================================
+# SECTION: FULL SCAN (PRIMARY SEARCH PROVIDER)
+# =====================================================================
+
+def run_duffel_scan(
+    params: SearchParams,
+    dep_override: Optional[date] = None,
+    ret_override: Optional[date] = None,
+) -> List[FlightOption]:
+    """
+    Full Duffel scan for a single date pair.
+    Results get Skyscanner booking URLs (not direct Duffel booking).
+    This is the primary search path when FLIGHT_PROVIDER=duffel.
+    """
+    dep = dep_override or getattr(params, "earliestDeparture", None)
+    ret = ret_override
+
+    if ret is None:
+        try:
+            nights = getattr(params, "minStayDays", None) or getattr(params, "nights", None)
+            if nights and dep:
+                ret = dep + timedelta(days=int(nights))
+        except Exception:
+            pass
+
+    if not dep or not ret:
+        print("[duffel] missing dep or ret date, skipping")
+        return []
+
+    origin = getattr(params, "origin", None)
+    destination = getattr(params, "destination", None)
+    if not origin or not destination:
+        print("[duffel] missing origin or destination, skipping")
+        return []
+
+    cabin_raw = getattr(params, "cabin", "BUSINESS") or "BUSINESS"
+    cabin = (cabin_raw or "").strip().upper().replace(" ", "_")
+    passengers = int(getattr(params, "passengers", 1) or 1)
+    max_connections = getattr(params, "maxConnections", None)
+
+    slices = [
+        {"origin": origin, "destination": destination, "departure_date": dep.isoformat()},
+        {"origin": destination, "destination": origin, "departure_date": ret.isoformat()},
+    ]
+    pax = [{"type": "adult"} for _ in range(passengers)]
+
+    payload: Dict[str, Any] = {
+        "data": {
+            "slices": slices,
+            "passengers": pax,
+            "cabin_class": cabin.lower().replace("_", " ") if cabin == "PREMIUM_ECONOMY" else cabin.lower(),
+        }
+    }
+    if max_connections is not None:
+        payload["data"]["max_connections"] = int(max_connections)
+
+    print(f"[duffel] scan origin={origin} dest={destination} dep={dep} ret={ret} cabin={cabin} pax={passengers}")
+
+    try:
+        data = duffel_post("/air/offer_requests", payload)
+    except Exception as e:
+        print(f"[duffel] offer_request failed: {e}")
+        return []
+
+    offer_request_id = data.get("id")
+    if not offer_request_id:
+        print("[duffel] no offer_request_id")
+        return []
+
+    try:
+        offers_json = duffel_list_offers(offer_request_id, limit=50)
+        if not offers_json:
+            time.sleep(1.5)
+            offers_json = duffel_list_offers(offer_request_id, limit=50)
+    except Exception as e:
+        print(f"[duffel] list_offers failed: {e}")
+        return []
+
+    print(f"[duffel] offers={len(offers_json)}")
+
+    # Build Skyscanner URL once for this route/date/cabin
+    sky_url = build_skyscanner_url(origin, destination, dep, ret, cabin, passengers)
+
+    results: List[FlightOption] = []
+    for offer in offers_json:
+        try:
+            opt = map_duffel_offer_to_option(offer, dep, ret, passengers=passengers)
+            # Override booking URL with Skyscanner deep link
+            opt = opt.model_copy(update={"bookingUrl": sky_url, "url": sky_url})
+            results.append(opt)
+        except Exception as e:
+            print(f"[duffel] map error: {e}")
+            continue
+
+    if results:
+        r0 = results[0]
+        print(f"[duffel] mapped={len(results)} first_airline={r0.airline} first_price={r0.price} {r0.currency} url={'YES' if r0.url else 'NO'}")
+
+    return results
