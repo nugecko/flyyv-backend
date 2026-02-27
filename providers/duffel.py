@@ -275,7 +275,6 @@ def map_duffel_offer_to_option(
 
     total_price = float(offer.get("total_amount", 0) or 0)
     price = total_price / pax
-    print(f"[PRICE_DEBUG] total_amount={total_price}, pax={pax}, per_person={price}")
     currency = offer.get("total_currency", "GBP")
 
     owner = offer.get("owner", {}) or {}
