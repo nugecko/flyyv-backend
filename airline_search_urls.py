@@ -171,12 +171,32 @@ def _sq(o, d, dep, ret, cabin, pax):
     )
 
 def _tk(o, d, dep, ret, cabin, pax):
+    # Turkish uses their booking search form with specific params
     return (
-        f"https://www.turkishairlines.com/en-int/flights/best-prices/roundtrip/"
-        f"?origin={o}&destination={d}"
+        f"https://www.turkishairlines.com/en-int/booking/flight-search/"
+        f"?tripType=R&origin={o}&destination={d}"
         f"&departureDate={_fmt(dep, '%Y-%m-%d')}"
         f"&returnDate={_fmt(ret, '%Y-%m-%d')}"
-        f"&adults={pax}&cabin={_cabin_tk(cabin)}"
+        f"&adult={pax}&cabin={_cabin_tk(cabin)}"
+    )
+
+def _fi(o, d, dep, ret, cabin, pax):
+    # Icelandair
+    cabin_fi = {"FIRST": "business", "BUSINESS": "business", "PREMIUM_ECONOMY": "saga", "ECONOMY": "economy"}.get(cabin, "business")
+    return (
+        f"https://www.icelandair.com/flights/roundtrip/{o}/{d}/"
+        f"{_fmt(dep, '%Y-%m-%d')}/{_fmt(ret, '%Y-%m-%d')}"
+        f"/{pax}/0/0/{cabin_fi}/"
+    )
+
+def _at(o, d, dep, ret, cabin, pax):
+    # Royal Air Maroc
+    return (
+        f"https://www.royalairmaroc.com/gb-en/book-your-flight"
+        f"?type=RT&from={o}&to={d}"
+        f"&departure={_fmt(dep, '%Y-%m-%d')}"
+        f"&return={_fmt(ret, '%Y-%m-%d')}"
+        f"&adults={pax}&cabin={_cabin_name(cabin)}"
     )
 
 def _ey(o, d, dep, ret, cabin, pax):
@@ -418,8 +438,12 @@ AIRLINE_URL_BUILDERS = {
     "UA": _ua,   # United Airlines
     "AC": _ac,   # Air Canada
 
-    # Africa
+    # Africa & North Africa
     "ET": _et,   # Ethiopian Airlines
+    "AT": _at,   # Royal Air Maroc
+
+    # North Atlantic
+    "FI": _fi,   # Icelandair
 }
 
 
