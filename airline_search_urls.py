@@ -480,23 +480,24 @@ def get_booking_urls(
     dep_str = dep_date.strftime("%Y%m%d")
     ret_str = ret_date.strftime("%Y%m%d")
 
-    cabin_map = {
-        "BUSINESS": "business",
-        "FIRST": "first",
-        "PREMIUM_ECONOMY": "premiumeconomy",
-        "ECONOMY": "economy",
+    # Normalise cabin to uppercase with underscores
+    cabin_norm = (cabin or "BUSINESS").strip().upper().replace(" ", "_").replace("-", "_")
+    # Also handle lowercase inputs like "business", "economy"
+    cabin_norm_map = {
+        "BUSINESS": "BUSINESS", "FIRST": "FIRST",
+        "PREMIUM_ECONOMY": "PREMIUM_ECONOMY", "ECONOMY": "ECONOMY",
+        # lowercase variants
+        "business": "BUSINESS", "first": "FIRST",
+        "premium_economy": "PREMIUM_ECONOMY", "economy": "ECONOMY",
+        "premiumeconomy": "PREMIUM_ECONOMY",
     }
-    cabin_sky = cabin_map.get((cabin or "").upper().replace(" ", "_"), "business")
+    cabin_norm = cabin_norm_map.get(cabin_norm, "BUSINESS")
 
-    # Google Flights cabin: business, first, premium, economy
-    cabin_google_map = {
-        "BUSINESS": "business",
-        "FIRST": "first",
-        "PREMIUM_ECONOMY": "premium",
-        "ECONOMY": "economy",
-    }
-    cabin_google = cabin_google_map.get((cabin or "").upper().replace(" ", "_"), "business")
-    pax_label = f"{passengers} adult" if passengers == 1 else f"{passengers} adults"
+    cabin_sky = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premiumeconomy", "ECONOMY": "economy"}.get(cabin_norm, "business")
+    cabin_google = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premium", "ECONOMY": "economy"}.get(cabin_norm, "business")
+
+    pax = max(1, int(passengers or 1))
+    pax_label = f"{pax} adult" if pax == 1 else f"{pax} adults"
 
     google = (
         f"https://www.google.com/travel/flights?q=flights%20from%20{origin}%20to%20{destination}"
@@ -507,17 +508,17 @@ def get_booking_urls(
     skyscanner = (
         f"https://www.skyscanner.com/transport/flights"
         f"/{origin}/{destination}/{dep_str}/{ret_str}"
-        f"/?adults={passengers}&cabinclass={cabin_sky}&ref=flyyv"
+        f"/?adults={pax}&cabinclass={cabin_sky}&ref=flyyv"
     )
 
     kayak = (
         f"https://www.kayak.co.uk/flights"
         f"/{origin}-{destination}/{dep_date.strftime('%Y-%m-%d')}/{ret_date.strftime('%Y-%m-%d')}"
-        f"/{cabin_sky}/{passengers}adults"
+        f"/{cabin_sky}/{pax}adults"
     )
 
     airline_url = build_airline_search_url(
-        airline_code, origin, destination, dep_date, ret_date, cabin, passengers
+        airline_code, origin, destination, dep_date, ret_date, cabin_norm, pax
     )
 
     return {
