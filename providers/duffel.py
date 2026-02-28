@@ -651,6 +651,10 @@ def run_duffel_scan(
         try:
             opt = map_duffel_offer_to_option(offer, dep, ret, passengers=passengers)
 
+            # Construct test Duffel operator URL (your dashboard - for testing only)
+            offer_id = offer.get("id", "")
+            duffel_test_url = f"https://app.duffel.com/flyyv/live/search-v2/{offer_request_id}/{offer_id}" if offer_request_id and offer_id else None
+
             # Build all three booking URLs for this specific result
             if get_booking_urls:
                 booking_data = get_booking_urls(
@@ -668,6 +672,8 @@ def run_duffel_scan(
                     "url": booking_data["skyscanner"],
                     "bookingUrl": booking_data["airline"] or booking_data["skyscanner"],
                     "bookingUrls": booking_data,
+                    "offerRequestId": offer_request_id,
+                    "duffelLink": duffel_test_url,
                 })
             else:
                 sky_url = build_skyscanner_url(origin, destination, dep, ret, cabin, passengers)

@@ -101,6 +101,8 @@ class FlightOption(BaseModel):
 
     bookingUrl: Optional[str] = None
     url: Optional[str] = None
+    offerRequestId: Optional[str] = None   # Duffel prq_... needed for Duffel Links
+    duffelLink: Optional[str] = None       # links.duffel.com/... once Links API enabled
     bookingUrls: Optional[dict] = None  # {"skyscanner": "...", "kayak": "...", "airline": "..." or None, "price": float, "currency": str}
 
 
