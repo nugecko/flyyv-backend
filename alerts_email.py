@@ -17,7 +17,6 @@ from uuid import uuid4
 from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 
-from alerts_email import send_alert_email_for_alert, send_smart_alert_email
 from config import master_alerts_enabled, should_send_alert
 from db import SessionLocal
 from models import Alert, AlertRun, AppUser
