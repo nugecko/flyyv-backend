@@ -793,7 +793,9 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     # ================================================================
 
     start_label = params.earliestDeparture.strftime("%d %b %Y")
-    end_label = params.latestDeparture.strftime("%d %b %Y")
+    # Use alert's original departure_end for display (params.latestDeparture is capped for pair generation)
+    alert_dep_end = _get_attr(alert, "departure_end", None) or params.latestDeparture
+    end_label = alert_dep_end.strftime("%d %b %Y") if hasattr(alert_dep_end, "strftime") else params.latestDeparture.strftime("%d %b %Y")
 
     nights_val = _compute_trip_nights(alert)
     nights_text = str(nights_val) if nights_val else None
