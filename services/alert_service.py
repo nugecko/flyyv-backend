@@ -81,20 +81,47 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
     dep_start = alert.departure_start
     dep_end = alert.departure_end or alert.departure_start
 
-    if alert.return_start and alert.return_end:
-        min_stay = max(1, (alert.return_start - dep_start).days)
-        max_stay = max(min_stay, (alert.return_end - dep_start).days)
-    else:
-        min_stay = 1
-        max_stay = 21
-
     pax = _derive_alert_passengers(alert)
+
+    # ---- Derive fixed nights ----
+    # Priority: alert.nights field, then return_start - dep_start
+    nights = None
+    raw_nights = getattr(alert, "nights", None)
+    if raw_nights is not None:
+        try:
+            nights = int(raw_nights)
+        except Exception:
+            nights = None
+
+    if nights is None and alert.return_start:
+        try:
+            nights = max(1, (alert.return_start - dep_start).days)
+        except Exception:
+            nights = None
+
+    if nights and nights > 0:
+        # FlyyvFlex fixed-night: cap latestDeparture so last pair has a valid return
+        from datetime import timedelta
+        latest_valid_dep = dep_end - timedelta(days=nights)
+        if latest_valid_dep < dep_start:
+            latest_valid_dep = dep_start
+        min_stay = nights
+        max_stay = nights
+    else:
+        # Fallback: variable stay
+        latest_valid_dep = dep_end
+        if alert.return_start and alert.return_end:
+            min_stay = max(1, (alert.return_start - dep_start).days)
+            max_stay = max(min_stay, (alert.return_end - dep_start).days)
+        else:
+            min_stay = 1
+            max_stay = 21
 
     return SearchParams(
         origin=alert.origin,
         destination=alert.destination,
         earliestDeparture=dep_start,
-        latestDeparture=dep_end,
+        latestDeparture=latest_valid_dep,
         minStayDays=min_stay,
         maxStayDays=max_stay,
         maxPrice=None,
@@ -157,6 +184,17 @@ def process_alert(alert: Alert, db: Session) -> None:
     db.add(run_row)
     db.commit()
 
+    # ---- Guard: skip and expire alerts with past departure dates ----
+    dep_end = getattr(alert, "departure_end", None) or getattr(alert, "departure_start", None)
+    if dep_end and dep_end < now.date():
+        print(f"[alerts] skipping past-date alert run_id={alert_run_id} alert_id={alert.id} dep_end={dep_end}")
+        alert.is_active = False
+        alert.updated_at = now
+        run_row.reason = "expired_past_dates"
+        db.add(run_row)
+        db.commit()
+        return
+
     # ---- Build scan params ----
     params = build_search_params_for_alert(alert)
 
@@ -218,7 +256,8 @@ def process_alert(alert: Alert, db: Session) -> None:
     )
 
     if not options:
-        db.add(AlertRun(id=alert_run_id, alert_id=alert.id, run_at=now, price_found=None, sent=False, reason="no_results_scan_empty"))
+        run_row.reason = "no_results_scan_empty"
+        db.add(run_row)
         db.commit()
         return
 
@@ -522,8 +561,12 @@ def run_all_alerts_cycle() -> None:
             try:
                 process_alert(alert, db)
             except Exception as e:
-                print(f"[alerts] Error processing alert {alert.id}: {e}")
+                print(f"[alerts] Error processing alert {getattr(alert, 'id', '?')}: {e}")
                 traceback.print_exc()
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
     finally:
         db.close()
