@@ -159,10 +159,10 @@ def _get_booking_urls_for_result(
 def _booking_buttons_html(
     booking_urls: Dict[str, Optional[str]],
     airline_name: Optional[str] = None,
+    airline_logo: Optional[str] = None,
 ) -> str:
     """
-    Renders the 3 booking CTA buttons for an email row.
-    Skyscanner and Kayak always shown. Airline direct only if URL available.
+    Renders the booking CTA buttons for an email row with logos.
     """
     airline_label = f"Book with {airline_name}" if airline_name else "Book direct"
 
@@ -175,30 +175,35 @@ def _booking_buttons_html(
 
     if sky_url:
         buttons.append(
-            f'<a href="{sky_url}" style="display:inline-block;background:#0770e3;color:#ffffff;'
+            f'<a href="{sky_url}" style="display:inline-flex;align-items:center;background:#0770e3;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Skyscanner ↗</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
+            f'<img src="https://www.skyscanner.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Skyscanner</a>'
         )
 
     if kayak_url:
         buttons.append(
-            f'<a href="{kayak_url}" style="display:inline-block;background:#ff690f;color:#ffffff;'
+            f'<a href="{kayak_url}" style="display:inline-flex;align-items:center;background:#ff690f;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Kayak ↗</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
+            f'<img src="https://www.kayak.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Kayak</a>'
         )
 
     if google_url:
         buttons.append(
-            f'<a href="{google_url}" style="display:inline-block;background:#4285f4;color:#ffffff;'
+            f'<a href="{google_url}" style="display:inline-flex;align-items:center;background:#4285f4;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Google Flights ↗</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
+            f'<img src="https://www.google.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Google Flights</a>'
         )
 
     if airline_url:
+        logo_html = f'<img src="{airline_logo}" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> ' if airline_logo else ""
         buttons.append(
-            f'<a href="{airline_url}" style="display:inline-block;background:#111827;color:#ffffff;'
+            f'<a href="{airline_url}" style="display:inline-flex;align-items:center;background:#111827;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">{airline_label} ↗</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
+            f'{logo_html}{airline_label}</a>'
         )
 
     return "".join(buttons) if buttons else ""
@@ -593,7 +598,8 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
         alert_id=str(_get_attr(alert, "id", "")),
         run_id=alert_run_id,
     )
-    booking_buttons = _booking_buttons_html(booking_urls, airline_label)
+    airline_logo_url = f"https://images.kiwi.com/airlines/64/{airline_code}.png" if airline_code else None
+    booking_buttons = _booking_buttons_html(booking_urls, airline_label, airline_logo=airline_logo_url)
 
     airline_label = getattr(cheapest, "airline", None) or "Multiple airlines"
     airline_code = getattr(cheapest, "airlineCode", None) or ""
@@ -948,7 +954,9 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
         else:
             row_booking_urls = {"skyscanner": None, "kayak": None, "airline": None}
 
-        row_buttons = _booking_buttons_html(row_booking_urls, airline_label if p.get("cheapestAirlineCode") else None)
+        airline_code_row = p.get("cheapestAirlineCode")
+        airline_logo_row = f"https://images.kiwi.com/airlines/64/{airline_code_row}.png" if airline_code_row else None
+        row_buttons = _booking_buttons_html(row_booking_urls, airline_label if airline_code_row else None, airline_logo=airline_logo_row)
 
         within = False
         threshold_int = None
