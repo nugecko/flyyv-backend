@@ -225,7 +225,12 @@ def process_alert(alert: Alert, db: Session) -> None:
             cache_hit = False
 
     if options is None:
-        options = run_provider_scan(scan_params)
+        from services.search_service import generate_date_pairs
+        pairs = generate_date_pairs(scan_params)
+        options = []
+        for dep_date, ret_date in pairs:
+            pair_results = run_provider_scan(scan_params, dep_override=dep_date, ret_override=ret_date)
+            options.extend(pair_results)
 
         def _opt_to_dict(o):
             if hasattr(o, "model_dump"):
