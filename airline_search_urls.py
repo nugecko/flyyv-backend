@@ -95,13 +95,13 @@ def _cabin_name_cap(cabin: str) -> str:
 # =====================================================================
 
 def _ba(o, d, dep, ret, cabin, pax):
-    # BA uses YYYYMMDD and cabin codes C/W/F/M
+    # BA schedules path bypasses session lock, allows Select and Book
     return (
-        f"https://www.britishairways.com/travel/fx/public/en_gb"
-        f"?departurePoint={o}&destinationPoint={d}"
-        f"&departureDate={_fmt(dep, '%Y%m%d')}"
-        f"&returnDate={_fmt(ret, '%Y%m%d')}"
-        f"&cabin={_cabin_ba(cabin)}&numberOfAdults={pax}&tripType=R"
+        f"https://www.britishairways.com/travel/schedulesresults/public/en_gb"
+        f"?origin={o}&destination={d}"
+        f"&outboundDate={_fmt(dep, '%Y-%m-%d')}"
+        f"&inboundDate={_fmt(ret, '%Y-%m-%d')}"
+        f"&CabinCode={_cabin_ba(cabin)}&NumberOfAdults={pax}&TripType=R"
     )
 
 def _qr(o, d, dep, ret, cabin, pax):
@@ -115,12 +115,14 @@ def _qr(o, d, dep, ret, cabin, pax):
     )
 
 def _ek(o, d, dep, ret, cabin, pax):
+    # Emirates requires DDMMYY flat format (no dashes), cabin lowercase
+    cabin_ek = {"FIRST": "first", "BUSINESS": "business", "PREMIUM_ECONOMY": "premiumeconomy", "ECONOMY": "economy"}.get(cabin, "business")
     return (
-        f"https://www.emirates.com/gb/english/book/flights/#/search"
-        f"?type=R&origin={o}&destination={d}"
-        f"&departureDate={_fmt(dep, '%Y-%m-%d')}"
-        f"&returnDate={_fmt(ret, '%Y-%m-%d')}"
-        f"&adults={pax}&cabin={_cabin_ek(cabin)}"
+        f"https://www.emirates.com/english/book/flights/"
+        f"?origin={o}&destination={d}"
+        f"&departureDate={_fmt(dep, '%d%m%y')}"
+        f"&returnDate={_fmt(ret, '%d%m%y')}"
+        f"&adults={pax}&cabin={cabin_ek}"
     )
 
 def _lh(o, d, dep, ret, cabin, pax):
@@ -321,19 +323,22 @@ def _aa(o, d, dep, ret, cabin, pax):
 def _dl(o, d, dep, ret, cabin, pax):
     cabin_dl = {"FIRST": "F", "BUSINESS": "C", "PREMIUM_ECONOMY": "W", "ECONOMY": "Y"}.get(cabin, "C")
     return (
-        f"https://www.delta.com/flight-search/search"
-        f"?tripType=ROUND_TRIP&fromAirportCode={o}&toAirportCode={d}"
+        f"https://www.delta.com/flightsearch/book-a-flight"
+        f"?action=findFlights&originCity={o}&destinationCity={d}"
         f"&departureDate={_fmt(dep, '%Y-%m-%d')}"
         f"&returnDate={_fmt(ret, '%Y-%m-%d')}"
-        f"&paxCount={pax}&cabinType={cabin_dl}"
+        f"&paxCount={pax}&cabinClass={cabin_dl}"
     )
 
 def _ua(o, d, dep, ret, cabin, pax):
-    cabin_ua = {"FIRST": "First", "BUSINESS": "Business", "PREMIUM_ECONOMY": "PremiumEconomy", "ECONOMY": "Economy"}.get(cabin, "Business")
+    # United FSR path - requires tt=2 (roundtrip), at=2 (adult), st=bestf
+    cabin_ua = {"FIRST": "F", "BUSINESS": "C", "PREMIUM_ECONOMY": "W", "ECONOMY": "Y"}.get(cabin, "C")
     return (
-        f"https://www.united.com/ual/en/gb/flight-search/book-a-flight/results/rev"
-        f"?f={o}&t={d}&d={_fmt(dep, '%Y-%m-%d')}&r={_fmt(ret, '%Y-%m-%d')}"
-        f"&sc={cabin_ua}&px={pax}&tt=1"
+        f"https://www.united.com/en/us/fsr/chooseFlights"
+        f"?f={o}&t={d}"
+        f"&d={_fmt(dep, '%Y-%m-%d')}"
+        f"&r={_fmt(ret, '%Y-%m-%d')}"
+        f"&tt=2&at=2&st=bestf&c={cabin_ua}"
     )
 
 def _ac(o, d, dep, ret, cabin, pax):
@@ -483,6 +488,22 @@ def get_booking_urls(
     }
     cabin_sky = cabin_map.get((cabin or "").upper().replace(" ", "_"), "business")
 
+    # Google Flights cabin: business, first, premium, economy
+    cabin_google_map = {
+        "BUSINESS": "business",
+        "FIRST": "first",
+        "PREMIUM_ECONOMY": "premium",
+        "ECONOMY": "economy",
+    }
+    cabin_google = cabin_google_map.get((cabin or "").upper().replace(" ", "_"), "business")
+    pax_label = f"{passengers} adult" if passengers == 1 else f"{passengers} adults"
+
+    google = (
+        f"https://www.google.com/travel/flights?q=flights%20from%20{origin}%20to%20{destination}"
+        f"%20on%20{dep_date.strftime('%Y-%m-%d')}%20through%20{ret_date.strftime('%Y-%m-%d')}"
+        f"%20{cabin_google}%20class%20{pax_label.replace(' ', '%20')}"
+    )
+
     skyscanner = (
         f"https://www.skyscanner.com/transport/flights"
         f"/{origin}/{destination}/{dep_str}/{ret_str}"
@@ -502,6 +523,7 @@ def get_booking_urls(
     return {
         "skyscanner": skyscanner,
         "kayak": kayak,
+        "google": google,
         "airline": airline_url,
         "price": price,
         "currency": currency,

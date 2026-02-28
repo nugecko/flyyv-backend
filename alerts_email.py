@@ -168,6 +168,7 @@ def _booking_buttons_html(
 
     sky_url = booking_urls.get("skyscanner")
     kayak_url = booking_urls.get("kayak")
+    google_url = booking_urls.get("google")
     airline_url = booking_urls.get("airline")
 
     buttons = []
@@ -184,6 +185,13 @@ def _booking_buttons_html(
             f'<a href="{kayak_url}" style="display:inline-block;background:#ff690f;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
             f'font-size:13px;margin-right:6px;margin-bottom:6px;">Kayak ↗</a>'
+        )
+
+    if google_url:
+        buttons.append(
+            f'<a href="{google_url}" style="display:inline-block;background:#4285f4;color:#ffffff;'
+            f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Google Flights ↗</a>'
         )
 
     if airline_url:
