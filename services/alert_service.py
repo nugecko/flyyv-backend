@@ -100,11 +100,9 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
             nights = None
 
     if nights and nights > 0:
-        # FlyyvFlex fixed-night: cap latestDeparture so last pair has a valid return
-        from datetime import timedelta
-        latest_valid_dep = dep_end - timedelta(days=nights)
-        if latest_valid_dep < dep_start:
-            latest_valid_dep = dep_start
+        # FlyyvFlex fixed-night: pass nights explicitly, keep full dep window
+        # The pair generator uses: last_dep = latest - nights, which gives correct pairs
+        latest_valid_dep = dep_end  # keep original window
         min_stay = nights
         max_stay = nights
     else:
@@ -124,6 +122,7 @@ def build_search_params_for_alert(alert: Alert) -> SearchParams:
         latestDeparture=latest_valid_dep,
         minStayDays=min_stay,
         maxStayDays=max_stay,
+        nights=nights if nights and nights > 0 else None,
         maxPrice=None,
         cabin=alert.cabin or "BUSINESS",
         passengers=pax,
