@@ -1,9 +1,9 @@
 import os
 import smtplib
 from email.message import EmailMessage
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Tuple, Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 
 from fastapi import HTTPException
 
@@ -18,9 +18,185 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 ALERT_FROM_EMAIL = os.environ.get("ALERT_FROM_EMAIL", "alert@flyyv.com")
 
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "https://flyyv.com")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.flyyv.com")
 
 # =====================================================================
 # SECTION END: SMTP CONFIG AND CONSTANTS
+# =====================================================================
+
+
+# =====================================================================
+# SECTION START: BOOKING URL + TRACKING HELPERS
+# =====================================================================
+
+def _build_tracked_url(
+    destination_url: str,
+    src: str,
+    alert_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    airline_code: Optional[str] = None,
+    origin: Optional[str] = None,
+    destination: Optional[str] = None,
+    dep_date: Optional[str] = None,
+    ret_date: Optional[str] = None,
+    cabin: Optional[str] = None,
+    passengers: Optional[int] = None,
+    price: Optional[float] = None,
+) -> str:
+    """
+    Wraps any URL through api.flyyv.com/go for email click tracking.
+    The backend logs the click then 302 redirects to destination_url.
+    """
+    base = API_BASE_URL.rstrip("/")
+    params: Dict[str, str] = {"url": destination_url, "src": src}
+    if alert_id:
+        params["alert_id"] = str(alert_id)
+    if run_id:
+        params["run_id"] = str(run_id)
+    if airline_code:
+        params["airline"] = airline_code
+    if origin:
+        params["origin"] = origin
+    if destination:
+        params["destination"] = destination
+    if dep_date:
+        params["dep"] = dep_date
+    if ret_date:
+        params["ret"] = ret_date
+    if cabin:
+        params["cabin"] = cabin
+    if passengers:
+        params["pax"] = str(passengers)
+    if price:
+        params["price"] = str(int(price))
+    return f"{base}/go?{urlencode(params)}"
+
+
+def _get_booking_urls_for_result(
+    result,
+    cabin: str,
+    passengers: int,
+    alert_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """
+    Build tracked Skyscanner, Kayak, and airline direct URLs for an alert result.
+    Returns dict with keys: skyscanner, kayak, airline (may be None).
+    All URLs go through /go tracking redirect.
+    """
+    try:
+        from airline_search_urls import get_booking_urls
+        from datetime import date as date_type
+
+        dep_raw = getattr(result, "departureDate", None)
+        ret_raw = getattr(result, "returnDate", None)
+        airline_code = getattr(result, "airlineCode", None) or ""
+        origin = getattr(result, "origin", None) or ""
+        destination = getattr(result, "destination", None) or ""
+
+        # Parse dates
+        def _to_date(v):
+            if isinstance(v, date_type):
+                return v
+            if v:
+                try:
+                    return date_type.fromisoformat(str(v)[:10])
+                except Exception:
+                    pass
+            return None
+
+        dep_date = _to_date(dep_raw)
+        ret_date = _to_date(ret_raw)
+
+        if not (dep_date and ret_date and origin and destination):
+            return {"skyscanner": None, "kayak": None, "airline": None}
+
+        raw = get_booking_urls(
+            airline_code=airline_code,
+            origin=origin,
+            destination=destination,
+            dep_date=dep_date,
+            ret_date=ret_date,
+            cabin=cabin,
+            passengers=passengers,
+            price=getattr(result, "price", 0) or 0,
+            currency="GBP",
+        )
+
+        dep_str = dep_date.isoformat()
+        ret_str = ret_date.isoformat()
+        price_val = getattr(result, "price", None)
+
+        def _track(url: Optional[str], src: str) -> Optional[str]:
+            if not url:
+                return None
+            return _build_tracked_url(
+                destination_url=url,
+                src=src,
+                alert_id=str(alert_id) if alert_id else None,
+                run_id=str(run_id) if run_id else None,
+                airline_code=airline_code or None,
+                origin=origin,
+                destination=destination,
+                dep_date=dep_str,
+                ret_date=ret_str,
+                cabin=cabin,
+                passengers=passengers,
+                price=float(price_val) if price_val else None,
+            )
+
+        return {
+            "skyscanner": _track(raw.get("skyscanner"), "skyscanner"),
+            "kayak": _track(raw.get("kayak"), "kayak"),
+            "airline": _track(raw.get("airline"), "airline"),
+        }
+
+    except Exception as e:
+        print(f"[alerts_email] booking urls failed: {e}")
+        return {"skyscanner": None, "kayak": None, "airline": None}
+
+
+def _booking_buttons_html(
+    booking_urls: Dict[str, Optional[str]],
+    airline_name: Optional[str] = None,
+) -> str:
+    """
+    Renders the 3 booking CTA buttons for an email row.
+    Skyscanner and Kayak always shown. Airline direct only if URL available.
+    """
+    airline_label = f"Book with {airline_name}" if airline_name else "Book direct"
+
+    sky_url = booking_urls.get("skyscanner")
+    kayak_url = booking_urls.get("kayak")
+    airline_url = booking_urls.get("airline")
+
+    buttons = []
+
+    if sky_url:
+        buttons.append(
+            f'<a href="{sky_url}" style="display:inline-block;background:#0770e3;color:#ffffff;'
+            f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Skyscanner ↗</a>'
+        )
+
+    if kayak_url:
+        buttons.append(
+            f'<a href="{kayak_url}" style="display:inline-block;background:#ff690f;color:#ffffff;'
+            f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Kayak ↗</a>'
+        )
+
+    if airline_url:
+        buttons.append(
+            f'<a href="{airline_url}" style="display:inline-block;background:#111827;color:#ffffff;'
+            f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">{airline_label} ↗</a>'
+        )
+
+    return "".join(buttons) if buttons else ""
+
+# =====================================================================
+# SECTION END: BOOKING URL + TRACKING HELPERS
 # =====================================================================
 
 
@@ -385,6 +561,32 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
         alert_run_id=alert_run_id,
     )
 
+    # Tracked Flyyv link
+    flyyv_tracked = _build_tracked_url(
+        destination_url=drill_url,
+        src="flyyv",
+        alert_id=str(_get_attr(alert, "id", "")) or None,
+        run_id=str(alert_run_id) if alert_run_id else None,
+        airline_code=getattr(cheapest, "airlineCode", None),
+        origin=origin,
+        destination=destination,
+        dep_date=str(getattr(cheapest, "departureDate", ""))[:10] or None,
+        ret_date=str(getattr(cheapest, "returnDate", ""))[:10] or None,
+        cabin=cabin,
+        passengers=passengers,
+        price=float(_get_attr(cheapest, "price", 0) or 0),
+    )
+
+    # Booking URLs
+    booking_urls = _get_booking_urls_for_result(
+        cheapest,
+        cabin=cabin,
+        passengers=passengers,
+        alert_id=str(_get_attr(alert, "id", "")),
+        run_id=alert_run_id,
+    )
+    booking_buttons = _booking_buttons_html(booking_urls, airline_label)
+
     airline_label = getattr(cheapest, "airline", None) or "Multiple airlines"
     airline_code = getattr(cheapest, "airlineCode", None) or ""
     airline_code_txt = f" ({airline_code})" if airline_code else ""
@@ -448,15 +650,22 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
               <div style="font-size:13px;color:#6b7280;margin:0 0 10px 0;">
                 per person, {dep_label} to {ret_label}
               </div>
-              <div style="font-size:14px;color:#111827;margin:0;">
+              <div style="font-size:14px;color:#111827;margin:0 0 14px 0;">
                 Cheapest option: <strong>{airline_label}</strong>{airline_code_txt}
+              </div>
+              <div style="margin-bottom:4px;">
+                {booking_buttons}
               </div>
             </div>
 
+            <div style="font-size:12px;color:#9ca3af;margin:0 0 16px 0;">
+              Prices change fast. Flyyv never marks up fares — you book directly with the provider.
+            </div>
+
             <div style="margin:0 0 18px 0;">
-              <a href="{drill_url}"
-                 style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:800;font-size:15px;">
-                View this flight
+              <a href="{flyyv_tracked}"
+                 style="font-size:13px;color:#6b7280;text-decoration:underline;">
+                View results on Flyyv
               </a>
             </div>
 
@@ -571,6 +780,8 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                 "totalFlights": len(flights),
                 "cheapestPrice": float(cheapest_per_pax),  # per person
                 "cheapestAirline": getattr(cheapest, "airline", None),
+                "cheapestAirlineCode": getattr(cheapest, "airlineCode", None),
+                "cheapestResult": cheapest,  # kept for booking URL generation
                 "flyyvLink": flyyv_link,
                 "minPrice": float(min_per_pax),  # per person
                 "flightsUnderThresholdCount": len(flights_under),
@@ -619,6 +830,16 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     top_pairs_sorted = sorted(top_pairs, key=lambda x: x["cheapestPrice"])[:5]
 
     open_full_results_url = build_alert_search_link(alert, alert_run_id=alert_run_id)
+    open_full_results_tracked = _build_tracked_url(
+        destination_url=open_full_results_url,
+        src="flyyv_full",
+        alert_id=str(_get_attr(alert, "id", "")) or None,
+        run_id=alert_run_id,
+        origin=origin,
+        destination=destination,
+        cabin=cabin,
+        passengers=passengers,
+    )
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -679,13 +900,45 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     # ================================================================
 
     rows_html = ""
+    alert_id_str = str(_get_attr(alert, "id", "")) or None
     for p in top_pairs_sorted:
         dep_label = _fmt_date_label(p["departureDate"])
         ret_label = _fmt_date_label(p["returnDate"])
 
         price_label = _fmt_money_gbp(p["cheapestPrice"])
         airline_label = p.get("cheapestAirline") or "Multiple airlines"
-        view_link = p.get("flyyvLink") or open_full_results_url
+        flyyv_link = p.get("flyyvLink") or open_full_results_url
+
+        # Tracked Flyyv link for this row
+        flyyv_row_tracked = _build_tracked_url(
+            destination_url=flyyv_link,
+            src="flyyv",
+            alert_id=alert_id_str,
+            run_id=alert_run_id,
+            airline_code=p.get("cheapestAirlineCode"),
+            origin=origin,
+            destination=destination,
+            dep_date=p["departureDate"][:10],
+            ret_date=p["returnDate"][:10],
+            cabin=cabin,
+            passengers=passengers,
+            price=p.get("cheapestPrice"),
+        )
+
+        # Build booking buttons for this row
+        cheapest_result = p.get("cheapestResult")
+        if cheapest_result is not None:
+            row_booking_urls = _get_booking_urls_for_result(
+                cheapest_result,
+                cabin=cabin,
+                passengers=passengers,
+                alert_id=alert_id_str,
+                run_id=alert_run_id,
+            )
+        else:
+            row_booking_urls = {"skyscanner": None, "kayak": None, "airline": None}
+
+        row_buttons = _booking_buttons_html(row_booking_urls, airline_label if p.get("cheapestAirlineCode") else None)
 
         within = False
         threshold_int = None
@@ -700,45 +953,38 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
 
         within_html = ""
         if within and threshold_int is not None:
-            within_html = f'<span style="color:#059669;font-weight:700;">, within your £{threshold_int} price range</span>'
+            within_html = f'<span style="color:#059669;font-weight:700;"> ✓ Within your £{threshold_int} budget</span>'
 
         rows_html += f"""
           <tr>
-            <td style="padding:0 0 10px 0;">
+            <td style="padding:0 0 12px 0;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
                      style="border:1px solid #e6e8ee;border-radius:12px;background:#ffffff;border-collapse:separate;">
                 <tr>
-
-                  <td style="padding:14px;vertical-align:top;">
-                    <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:4px;">
-                      {origin} → {destination}
-                    </div>
-
-                    <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">
-                      {dep_label} to {ret_label}
-                    </div>
-
-                    <div style="font-size:13px;color:#111827;">
-                      Cheapest option: <strong>{airline_label}</strong>{within_html}
-                    </div>
-                  </td>
-
-                  <td style="padding:14px;vertical-align:top;width:170px;">
-                    <div style="font-size:18px;color:#111827;font-weight:900;line-height:1.1;text-align:right;">
-                      {price_label}
-                    </div>
-
-                    <div style="font-size:12px;color:#6b7280;margin-top:2px;text-align:right;">
-                      per person
-                    </div>
-
-                    <div style="margin-top:10px;text-align:right;">
-                      <a href="{view_link}" style="font-size:13px;color:#2563eb;text-decoration:underline;font-weight:700;display:inline-block;">
-                        View flight
-                      </a>
+                  <td style="padding:14px 14px 6px 14px;vertical-align:top;">
+                    <div style="display:table;width:100%;">
+                      <div style="display:table-cell;vertical-align:top;">
+                        <div style="font-size:14px;color:#111827;font-weight:700;margin-bottom:3px;">
+                          {origin} → {destination} &nbsp;·&nbsp; {dep_label} → {ret_label}
+                        </div>
+                        <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">
+                          From: <strong>{airline_label}</strong>{within_html}
+                        </div>
+                      </div>
+                      <div style="display:table-cell;vertical-align:top;text-align:right;white-space:nowrap;padding-left:12px;">
+                        <div style="font-size:20px;color:#111827;font-weight:900;line-height:1.1;">{price_label}</div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:2px;">per person</div>
+                      </div>
                     </div>
                   </td>
-
+                </tr>
+                <tr>
+                  <td style="padding:0 14px 14px 14px;">
+                    {row_buttons}
+                    <a href="{flyyv_row_tracked}" style="display:inline-block;font-size:12px;color:#9ca3af;text-decoration:underline;margin-top:4px;">
+                      View on Flyyv
+                    </a>
+                  </td>
                 </tr>
               </table>
             </td>
@@ -823,9 +1069,9 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
             </table>
 
             <div style="margin:18px 0 0 0;">
-              <a href="{open_full_results_url}"
+              <a href="{open_full_results_tracked}"
                  style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:900;font-size:15px;">
-                Open full results
+                Open full results on Flyyv
               </a>
             </div>
 
