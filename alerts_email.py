@@ -109,7 +109,7 @@ def _get_booking_urls_for_result(
         ret_date = _to_date(ret_raw)
 
         if not (dep_date and ret_date and origin and destination):
-            return {"skyscanner": None, "kayak": None, "airline": None}
+            return {"skyscanner": None, "kayak": None, "google": None, "airline": None}
 
         raw = get_booking_urls(
             airline_code=airline_code,
@@ -148,21 +148,22 @@ def _get_booking_urls_for_result(
         return {
             "skyscanner": _track(raw.get("skyscanner"), "skyscanner"),
             "kayak": _track(raw.get("kayak"), "kayak"),
+            "google": _track(raw.get("google"), "google"),
             "airline": _track(raw.get("airline"), "airline"),
         }
 
     except Exception as e:
         print(f"[alerts_email] booking urls failed: {e}")
-        return {"skyscanner": None, "kayak": None, "airline": None}
+        return {"skyscanner": None, "kayak": None, "google": None, "airline": None}
 
 
 def _booking_buttons_html(
     booking_urls: Dict[str, Optional[str]],
     airline_name: Optional[str] = None,
-    airline_logo: Optional[str] = None,
 ) -> str:
     """
-    Renders the booking CTA buttons for an email row with logos.
+    Renders the 3 booking CTA buttons for an email row.
+    Skyscanner and Kayak always shown. Airline direct only if URL available.
     """
     airline_label = f"Book with {airline_name}" if airline_name else "Book direct"
 
@@ -175,35 +176,30 @@ def _booking_buttons_html(
 
     if sky_url:
         buttons.append(
-            f'<a href="{sky_url}" style="display:inline-flex;align-items:center;background:#0770e3;color:#ffffff;'
+            f'<a href="{sky_url}" style="display:inline-block;background:#0770e3;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
-            f'<img src="https://www.skyscanner.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Skyscanner</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Skyscanner ↗</a>'
         )
 
     if kayak_url:
         buttons.append(
-            f'<a href="{kayak_url}" style="display:inline-flex;align-items:center;background:#ff690f;color:#ffffff;'
+            f'<a href="{kayak_url}" style="display:inline-block;background:#ff690f;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
-            f'<img src="https://www.kayak.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Kayak</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Kayak ↗</a>'
         )
 
     if google_url:
         buttons.append(
-            f'<a href="{google_url}" style="display:inline-flex;align-items:center;background:#4285f4;color:#ffffff;'
+            f'<a href="{google_url}" style="display:inline-block;background:#4285f4;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
-            f'<img src="https://www.google.com/favicon.ico" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> Google Flights</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">Google Flights ↗</a>'
         )
 
     if airline_url:
-        logo_html = f'<img src="{airline_logo}" width="14" height="14" style="margin-right:5px;vertical-align:middle;border-radius:2px;" alt=""> ' if airline_logo else ""
         buttons.append(
-            f'<a href="{airline_url}" style="display:inline-flex;align-items:center;background:#111827;color:#ffffff;'
+            f'<a href="{airline_url}" style="display:inline-block;background:#111827;color:#ffffff;'
             f'text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:700;'
-            f'font-size:13px;margin-right:6px;margin-bottom:6px;">'
-            f'{logo_html}{airline_label}</a>'
+            f'font-size:13px;margin-right:6px;margin-bottom:6px;">{airline_label} ↗</a>'
         )
 
     return "".join(buttons) if buttons else ""
@@ -598,8 +594,7 @@ def send_alert_email_for_alert(alert, cheapest, params, alert_run_id: Optional[s
         alert_id=str(_get_attr(alert, "id", "")),
         run_id=alert_run_id,
     )
-    airline_logo_url = f"https://images.kiwi.com/airlines/64/{airline_code}.png" if airline_code else None
-    booking_buttons = _booking_buttons_html(booking_urls, airline_label, airline_logo=airline_logo_url)
+    booking_buttons = _booking_buttons_html(booking_urls, airline_label)
 
     airline_label = getattr(cheapest, "airline", None) or "Multiple airlines"
     airline_code = getattr(cheapest, "airlineCode", None) or ""
@@ -807,9 +802,7 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
     # ================================================================
 
     start_label = params.earliestDeparture.strftime("%d %b %Y")
-    # Use alert's original departure_end for display (params.latestDeparture is capped for pair generation)
-    alert_dep_end = _get_attr(alert, "departure_end", None) or params.latestDeparture
-    end_label = alert_dep_end.strftime("%d %b %Y") if hasattr(alert_dep_end, "strftime") else params.latestDeparture.strftime("%d %b %Y")
+    end_label = params.latestDeparture.strftime("%d %b %Y")
 
     nights_val = _compute_trip_nights(alert)
     nights_text = str(nights_val) if nights_val else None
@@ -952,11 +945,9 @@ def send_smart_alert_email(alert, options: List, params, alert_run_id: Optional[
                 run_id=alert_run_id,
             )
         else:
-            row_booking_urls = {"skyscanner": None, "kayak": None, "airline": None}
+            row_booking_urls = {"skyscanner": None, "kayak": None, "google": None, "airline": None}
 
-        airline_code_row = p.get("cheapestAirlineCode")
-        airline_logo_row = f"https://images.kiwi.com/airlines/64/{airline_code_row}.png" if airline_code_row else None
-        row_buttons = _booking_buttons_html(row_booking_urls, airline_label if airline_code_row else None, airline_logo=airline_logo_row)
+        row_buttons = _booking_buttons_html(row_booking_urls, airline_label if p.get("cheapestAirlineCode") else None)
 
         within = False
         threshold_int = None
