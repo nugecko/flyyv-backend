@@ -493,16 +493,30 @@ def get_booking_urls(
     }
     cabin_norm = cabin_norm_map.get(cabin_norm, "BUSINESS")
 
+    # Skyscanner cabin values
     cabin_sky = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premiumeconomy", "ECONOMY": "economy"}.get(cabin_norm, "business")
-    cabin_google = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premium", "ECONOMY": "economy"}.get(cabin_norm, "business")
+    # Kayak cabin values — premium economy is "premium" not "premiumeconomy"
+    cabin_kayak = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premium", "ECONOMY": "economy"}.get(cabin_norm, "business")
+    # Google Flights travel_class param: 1=economy, 2=premium economy, 3=business, 4=first
+    cabin_google_class = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
 
     pax = max(1, int(passengers or 1))
-    pax_label = f"{pax} adult" if pax == 1 else f"{pax} adults"
 
+    # Google Flights — no clean public URL supports all params reliably.
+    # Best available: pre-fill origin/destination and dates via their search page.
+    # cabin class and adults are passed as hints but Google may not honour them.
+    cabin_google_class = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
     google = (
-        f"https://www.google.com/travel/flights?q=flights%20from%20{origin}%20to%20{destination}"
-        f"%20on%20{dep_date.strftime('%Y-%m-%d')}%20through%20{ret_date.strftime('%Y-%m-%d')}"
-        f"%20{cabin_google}%20class%20{pax_label.replace(' ', '%20')}"
+        f"https://www.google.com/travel/flights/search"
+        f"?hl=en&curr=GBP"
+        f"&tfs=CBwQAhoeagcIARID{origin}EgoyMDI2LTA0LTA4cgcIARID{destination}EgoyMDI2LTA0LTI5"
+    )
+    # Simpler fallback that at least gets the route right
+    google = (
+        f"https://www.google.com/travel/flights"
+        f"?q=flights+{origin}+to+{destination}"
+        f"+{dep_date.strftime('%Y-%m-%d')}+return+{ret_date.strftime('%Y-%m-%d')}"
+        f"&adults={pax}&travelclass={cabin_google_class}&hl=en&curr=GBP"
     )
 
     skyscanner = (
@@ -514,7 +528,7 @@ def get_booking_urls(
     kayak = (
         f"https://www.kayak.co.uk/flights"
         f"/{origin}-{destination}/{dep_date.strftime('%Y-%m-%d')}/{ret_date.strftime('%Y-%m-%d')}"
-        f"/{cabin_sky}/{pax}adults"
+        f"/{cabin_kayak}/{pax}adults"
     )
 
     airline_url = build_airline_search_url(
