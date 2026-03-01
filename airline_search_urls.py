@@ -28,6 +28,54 @@ def _fmt(d: date, fmt: str) -> str:
     return d.strftime(fmt)
 
 
+AIRLINE_HOMEPAGES = {
+    # Middle East
+    "EK": "https://www.emirates.com",
+    "QR": "https://www.qatarairways.com",
+    "EY": "https://www.etihad.com",
+    "RJ": "https://www.rj.com",
+    "WY": "https://www.omanair.com",
+    "ME": "https://www.mea.com.lb",
+    "MS": "https://www.egyptair.com",
+    # Europe - Western
+    "BA": "https://www.britishairways.com",
+    "VS": "https://www.virginatlantic.com",
+    "AF": "https://www.airfrance.com",
+    "KL": "https://www.klm.com",
+    "LH": "https://www.lufthansa.com",
+    "LX": "https://www.swiss.com",
+    "OS": "https://www.austrian.com",
+    "SN": "https://www.brusselsairlines.com",
+    "IB": "https://www.iberia.com",
+    "TP": "https://www.flytap.com",
+    "SK": "https://www.flysas.com",
+    "AY": "https://www.finnair.com",
+    "AZ": "https://www.ita-airways.com",
+    # Europe - Eastern
+    "LO": "https://www.lot.com",
+    "LY": "https://www.elal.com",
+    # Turkey
+    "TK": "https://www.turkishairlines.com",
+    # Asia-Pacific
+    "SQ": "https://www.singaporeair.com",
+    "CX": "https://www.cathaypacific.com",
+    "KE": "https://www.koreanair.com",
+    "OZ": "https://www.asiana.com",
+    "NH": "https://www.ana.co.jp/en",
+    "JL": "https://www.jal.com",
+    # North America
+    "AA": "https://www.aa.com",
+    "DL": "https://www.delta.com",
+    "UA": "https://www.united.com",
+    "AC": "https://www.aircanada.com",
+    # Africa
+    "ET": "https://www.ethiopianairlines.com",
+    "AT": "https://www.royalairmaroc.com",
+    # North Atlantic
+    "FI": "https://www.icelandair.com",
+}
+
+
 def build_airline_search_url(
     airline_code: str,
     origin: str,
@@ -38,20 +86,10 @@ def build_airline_search_url(
     passengers: int,
 ) -> Optional[str]:
     """
-    Returns a pre-filled roundtrip search URL for the given airline.
-    Returns None if the airline is not supported.
+    Returns the airline's homepage URL.
+    Deep links are unreliable across airlines; homepage is shown as the CTA.
     """
-    cabin_upper = (cabin or "BUSINESS").strip().upper().replace(" ", "_")
-    pax = max(1, int(passengers or 1))
-
-    builder = AIRLINE_URL_BUILDERS.get(airline_code.upper())
-    if not builder:
-        return None
-
-    try:
-        return builder(origin, destination, dep_date, ret_date, cabin_upper, pax)
-    except Exception:
-        return None
+    return AIRLINE_HOMEPAGES.get((airline_code or "").upper())
 
 
 # =====================================================================
