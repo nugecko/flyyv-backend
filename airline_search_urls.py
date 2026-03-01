@@ -456,6 +456,51 @@ AIRLINE_URL_BUILDERS = {
 # HELPER: get all booking options for a result
 # =====================================================================
 
+def _build_google_flights_url(
+    origin: str,
+    destination: str,
+    dep_date: date,
+    ret_date: date,
+    cabin_class: int,
+    adults: int,
+) -> str:
+    """
+    Build a Google Flights URL with a properly encoded tfs protobuf parameter.
+    Reverse-engineered from real Google Flights URLs — exactly matches their format.
+
+    cabin_class: 1=economy, 2=premium economy, 3=business, 4=first
+    Works with 3-letter IATA airport codes only (not city/metro codes).
+    """
+    import base64
+
+    def _iata_bytes(code: str) -> bytes:
+        return bytes([0x08, 0x01, 0x12, 0x03]) + code.upper().encode()
+
+    def _leg(date_str: str, orig: str, dest: str) -> bytes:
+        date_b = date_str.encode()       # e.g. b'2026-03-16', 10 bytes
+        orig_b = _iata_bytes(orig)       # 7 bytes
+        dest_b = _iata_bytes(dest)       # 7 bytes
+        inner = (
+            bytes([0x12, len(date_b)]) + date_b +
+            bytes([0x6a, len(orig_b)]) + orig_b +
+            bytes([0x72, len(dest_b)]) + dest_b
+        )
+        return bytes([0x1a, len(inner)]) + inner
+
+    dep_str = dep_date.strftime("%Y-%m-%d")
+    ret_str = ret_date.strftime("%Y-%m-%d")
+
+    payload = (
+        bytes([0x08, 0x1c, 0x10, cabin_class]) +
+        _leg(dep_str, origin, destination) +
+        _leg(ret_str, destination, origin) +
+        bytes([0x42, 0x01, 0x01, 0x48, adults, 0x70, 0x01, 0x98, 0x01, 0x01, 0xc8, 0x01, 0x01])
+    )
+
+    tfs = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    return f"https://www.google.com/travel/flights?tfs={tfs}&hl=en&curr=GBP"
+
+
 def get_booking_urls(
     airline_code: str,
     origin: str,
@@ -498,19 +543,13 @@ def get_booking_urls(
     # Kayak cabin values — premium economy is "premium" not "premiumeconomy"
     cabin_kayak = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premium", "ECONOMY": "economy"}.get(cabin_norm, "business")
     # Google Flights class: 1=economy, 2=premium economy, 3=business, 4=first
-    cabin_google_e = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
+    cabin_google_int = {"ECONOMY": 1, "PREMIUM_ECONOMY": 2, "BUSINESS": 3, "FIRST": 4}.get(cabin_norm, 3)
 
     pax = max(1, int(passengers or 1))
 
-    # Google Flights — uses a hash-based format that reliably pre-fills route, dates, cabin, pax.
-    # Format: #flt=ORIGIN.DEST.DEPDATE*DEST.ORIGIN.RETDATE;c:GBP;e:CLASS;sd:1;t:f;adt:PAX
-    dep_google = dep_date.strftime("%Y-%m-%d")
-    ret_google = ret_date.strftime("%Y-%m-%d")
-    google = (
-        f"https://www.google.com/travel/flights"
-        f"#flt={origin}.{destination}.{dep_google}*{destination}.{origin}.{ret_google}"
-        f";c:GBP;e:{cabin_google_e};sd:1;t:f;adt:{pax}"
-    )
+    # Google Flights — build proper tfs protobuf parameter.
+    # Reverse-engineered from real Google Flights URLs. Exactly matches Google's own format.
+    google = _build_google_flights_url(origin, destination, dep_date, ret_date, cabin_google_int, pax)
 
     # Skyscanner — correct param is adultsv2, not adults
     skyscanner = (
