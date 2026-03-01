@@ -497,32 +497,26 @@ def get_booking_urls(
     cabin_sky = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premiumeconomy", "ECONOMY": "economy"}.get(cabin_norm, "business")
     # Kayak cabin values — premium economy is "premium" not "premiumeconomy"
     cabin_kayak = {"BUSINESS": "business", "FIRST": "first", "PREMIUM_ECONOMY": "premium", "ECONOMY": "economy"}.get(cabin_norm, "business")
-    # Google Flights travel_class param: 1=economy, 2=premium economy, 3=business, 4=first
-    cabin_google_class = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
+    # Google Flights class: 1=economy, 2=premium economy, 3=business, 4=first
+    cabin_google_e = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
 
     pax = max(1, int(passengers or 1))
 
-    # Google Flights — no clean public URL supports all params reliably.
-    # Best available: pre-fill origin/destination and dates via their search page.
-    # cabin class and adults are passed as hints but Google may not honour them.
-    cabin_google_class = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}.get(cabin_norm, "3")
-    google = (
-        f"https://www.google.com/travel/flights/search"
-        f"?hl=en&curr=GBP"
-        f"&tfs=CBwQAhoeagcIARID{origin}EgoyMDI2LTA0LTA4cgcIARID{destination}EgoyMDI2LTA0LTI5"
-    )
-    # Simpler fallback that at least gets the route right
+    # Google Flights — uses a hash-based format that reliably pre-fills route, dates, cabin, pax.
+    # Format: #flt=ORIGIN.DEST.DEPDATE*DEST.ORIGIN.RETDATE;c:GBP;e:CLASS;sd:1;t:f;adt:PAX
+    dep_google = dep_date.strftime("%Y-%m-%d")
+    ret_google = ret_date.strftime("%Y-%m-%d")
     google = (
         f"https://www.google.com/travel/flights"
-        f"?q=flights+{origin}+to+{destination}"
-        f"+{dep_date.strftime('%Y-%m-%d')}+return+{ret_date.strftime('%Y-%m-%d')}"
-        f"&adults={pax}&travelclass={cabin_google_class}&hl=en&curr=GBP"
+        f"#flt={origin}.{destination}.{dep_google}*{destination}.{origin}.{ret_google}"
+        f";c:GBP;e:{cabin_google_e};sd:1;t:f;adt:{pax}"
     )
 
+    # Skyscanner — correct param is adultsv2, not adults
     skyscanner = (
-        f"https://www.skyscanner.com/transport/flights"
+        f"https://www.skyscanner.net/transport/flights"
         f"/{origin}/{destination}/{dep_str}/{ret_str}"
-        f"/?adults={pax}&cabinclass={cabin_sky}&ref=flyyv"
+        f"/?adultsv2={pax}&cabinclass={cabin_sky}&childrenv2=&ref=flyyv&rtn=1"
     )
 
     kayak = (
