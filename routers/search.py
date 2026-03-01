@@ -25,6 +25,7 @@ from services.search_service import (
     _USER_GUARD_LOCK,
     _USER_INFLIGHT,
     apply_global_airline_cap,
+    deduplicate_by_outbound,
     begin_user_inflight,
     end_user_inflight,
     estimate_date_pairs,
@@ -163,7 +164,8 @@ def search_business(params: SearchParams, background_tasks: BackgroundTasks):
         if estimated_pairs <= 1:
             with _hard_runtime_cap(get_search_hard_cap(), job_id=None):
                 options = run_provider_scan(params)
-                options = apply_global_airline_cap(options, max_share=0.5)
+                options = deduplicate_by_outbound(options)
+                options = apply_global_airline_cap(options, max_share=0.33)
                 return {
                     "status": "ok",
                     "mode": "sync",

@@ -284,6 +284,46 @@ def apply_filters(options: List[FlightOption], params: SearchParams) -> List[Fli
     return filtered
 
 
+def deduplicate_by_outbound(
+    options: List[FlightOption],
+) -> List[FlightOption]:
+    """
+    Within each airline, keep only the cheapest offer per unique outbound
+    flight-number signature. This prevents Duffel's outbound×return
+    combinatorial explosion from flooding results with one airline.
+
+    e.g. FI0451+FI0619 outbound × 4 different returns = 4 offers → collapsed to 1 (cheapest).
+    Different outbound flight combos for same airline are kept as separate entries.
+    """
+    # Sort cheapest first so we always keep the cheapest per outbound signature
+    sorted_opts = sorted(options, key=lambda o: o.price)
+
+    seen_signatures: set = set()
+    deduped: List[FlightOption] = []
+
+    for opt in sorted_opts:
+        airline = opt.airlineCode or opt.airline or "UNKNOWN"
+
+        # Build outbound signature from outbound segment flight numbers
+        outbound_segs = opt.outboundSegments or []
+        if outbound_segs:
+            flight_nums = tuple(
+                s.get("flightNumber", "") if isinstance(s, dict) else getattr(s, "flightNumber", "")
+                for s in outbound_segs
+            )
+            signature = (airline, flight_nums)
+        else:
+            # No segment detail — fall back to airline+date+duration
+            signature = (airline, opt.departureDate, opt.durationMinutes)
+
+        if signature not in seen_signatures:
+            seen_signatures.add(signature)
+            deduped.append(opt)
+
+    print(f"[search] deduplicate_by_outbound: {len(options)} → {len(deduped)} offers")
+    return deduped
+
+
 def balance_airlines(
     options: List[FlightOption],
     max_total: Optional[int] = None,
@@ -298,9 +338,9 @@ def balance_airlines(
 
     actual_total = min(max_total, len(sorted_by_price))
 
-    max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 40)
+    max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 25)
     if max_share_percent <= 0 or max_share_percent > 100:
-        max_share_percent = 40
+        max_share_percent = 25
 
     airline_counts: Dict[str, int] = defaultdict(int)
     result: List[FlightOption] = []
@@ -493,9 +533,10 @@ def run_search_job(job_id: str) -> None:
                         pending = set()
                         break
 
-        # Final global cap and balance
+        # Deduplicate by outbound flight signature before global cap
         if all_options:
-            all_options = apply_global_airline_cap(all_options, max_share=0.5)
+            all_options = deduplicate_by_outbound(all_options)
+            all_options = apply_global_airline_cap(all_options, max_share=0.33)
             JOB_RESULTS[job_id] = all_options
 
         job.status = JobStatus.COMPLETED
