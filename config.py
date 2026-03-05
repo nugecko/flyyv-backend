@@ -84,19 +84,19 @@ PLAN_DEFAULTS = {
         "plan_tier": "trial",
         "plan_active_alert_limit": 1,
         "plan_max_departure_window_days": 7,
-        "plan_checks_per_day": 48,  # unlimited in practice
+        "plan_checks_per_day": 1,   # once daily
     },
     "gold": {
         "plan_tier": "gold",
         "plan_active_alert_limit": 2,
         "plan_max_departure_window_days": 30,
-        "plan_checks_per_day": 48,  # unlimited in practice
+        "plan_checks_per_day": 1,   # once daily (~24h between checks)
     },
     "platinum": {
         "plan_tier": "platinum",
         "plan_active_alert_limit": 3,
         "plan_max_departure_window_days": 90,
-        "plan_checks_per_day": 48,  # unlimited in practice
+        "plan_checks_per_day": 3,   # 3x daily (~8h between checks)
     },
     "tester": {
         "plan_tier": "tester",
