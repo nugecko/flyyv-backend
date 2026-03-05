@@ -73,24 +73,30 @@ BASE44_WEBHOOK_SECRET = os.getenv("BASE44_WEBHOOK_SECRET")
 # Used by /user-sync, /admin/sync-user-tier, and /base44/user-webhook.
 # =====================================================================
 
+# Plan structure (March 2026):
+#   trial    — 7-day trial, 1 alert, 7-day window. Locks on expiry (alerts auto-paused).
+#   gold     — Paid tier 1: 2 active alerts, 30-day departure window, unlimited searches
+#   platinum — Paid tier 2: 3 active alerts, 90-day departure window, unlimited searches
+#   tester   — Internal: unlimited everything
+#   admin    — Internal: unlimited everything
 PLAN_DEFAULTS = {
-    "free": {
-        "plan_tier": "free",
+    "trial": {
+        "plan_tier": "trial",
         "plan_active_alert_limit": 1,
         "plan_max_departure_window_days": 7,
-        "plan_checks_per_day": 3,
+        "plan_checks_per_day": 48,  # unlimited in practice
     },
     "gold": {
         "plan_tier": "gold",
-        "plan_active_alert_limit": 3,
-        "plan_max_departure_window_days": 14,
-        "plan_checks_per_day": 6,
+        "plan_active_alert_limit": 2,
+        "plan_max_departure_window_days": 30,
+        "plan_checks_per_day": 48,  # unlimited in practice
     },
     "platinum": {
         "plan_tier": "platinum",
-        "plan_active_alert_limit": 10,
-        "plan_max_departure_window_days": 30,
-        "plan_checks_per_day": 12,
+        "plan_active_alert_limit": 3,
+        "plan_max_departure_window_days": 90,
+        "plan_checks_per_day": 48,  # unlimited in practice
     },
     "tester": {
         "plan_tier": "tester",
