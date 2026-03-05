@@ -304,17 +304,21 @@ def deduplicate_by_outbound(
     for opt in sorted_opts:
         airline = opt.airlineCode or opt.airline or "UNKNOWN"
 
-        # Build outbound signature from outbound segment flight numbers
+        # Build outbound signature from outbound segment flight numbers.
+        # IMPORTANT: departureDate is included so the same flight on different
+        # dates is NOT collapsed — fixes the "60-day search returns 28 results"
+        # bug where all dates of FI0451 were treated as one offer.
+        dep_date = opt.departureDate or ""
         outbound_segs = opt.outboundSegments or []
         if outbound_segs:
             flight_nums = tuple(
                 s.get("flightNumber", "") if isinstance(s, dict) else getattr(s, "flightNumber", "")
                 for s in outbound_segs
             )
-            signature = (airline, flight_nums)
+            signature = (airline, dep_date, flight_nums)
         else:
             # No segment detail — fall back to airline+date+duration
-            signature = (airline, opt.departureDate, opt.durationMinutes)
+            signature = (airline, dep_date, opt.durationMinutes)
 
         if signature not in seen_signatures:
             seen_signatures.add(signature)
@@ -338,7 +342,9 @@ def balance_airlines(
 
     actual_total = min(max_total, len(sorted_by_price))
 
-    max_share_percent = get_config_int("MAX_AIRLINE_SHARE_PERCENT", 25)
+    # NOTE: Directus/admin_config stores this as PER_PAIR_AIRLINE_CAP_PCT.
+    # MAX_AIRLINE_SHARE_PERCENT was a mismatch that meant the DB value was ignored.
+    max_share_percent = get_config_int("PER_PAIR_AIRLINE_CAP_PCT", 25)
     if max_share_percent <= 0 or max_share_percent > 100:
         max_share_percent = 25
 
