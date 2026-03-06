@@ -53,7 +53,7 @@ def user_sync(payload: UserSyncPayload):
         if not canonical_external_id:
             raise HTTPException(status_code=400, detail="Missing external_id")
 
-        FREE_DEFAULTS = PLAN_DEFAULTS["free"]
+        FREE_DEFAULTS = PLAN_DEFAULTS.get("free", PLAN_DEFAULTS["trial"])  # "free" renamed to "trial"
 
         # Primary lookup: external id
         user = db.query(AppUser).filter(AppUser.external_id == canonical_external_id).first()
@@ -190,8 +190,8 @@ async def base44_user_webhook(
             first_name = parts[0]
             last_name = " ".join(parts[1:]) if len(parts) > 1 else None
 
-    plan_tier_code = (user_obj.get("plan_tier_code") or "free").strip().lower()
-    defaults = PLAN_DEFAULTS.get(plan_tier_code, PLAN_DEFAULTS["free"])
+    plan_tier_code = (user_obj.get("plan_tier_code") or "trial").strip().lower()
+    defaults = PLAN_DEFAULTS.get(plan_tier_code, PLAN_DEFAULTS["trial"])  # "free" renamed to "trial"
 
     db = SessionLocal()
     try:
@@ -272,7 +272,7 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
         remaining = max(0, limit - int(active_alerts))
 
         entitlements = ProfileEntitlements(
-            plan_tier=app_user.plan_tier or "free",
+            plan_tier=app_user.plan_tier or "trial",
             active_alert_limit=limit,
             max_departure_window_days=int(app_user.plan_max_departure_window_days or 15),
             checks_per_day=int(app_user.plan_checks_per_day or 1),
@@ -288,7 +288,7 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
 
     profile_user = ProfileUser(id=external_id, email=email, credits=int(wallet_balance))
     subscription = SubscriptionInfo(
-        plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Free"),
+        plan="Flyyv " + (entitlements.plan_tier.capitalize() if entitlements else "Trial"),
         status="active",
         renews_on=None,
     )
