@@ -19,9 +19,16 @@ emails = [
 for email in emails:
     u = db.query(AppUser).filter(AppUser.email == email).first()
     if u:
-        deleted_alerts = db.query(Alert).filter(Alert.user_email == email).delete()
+        # Get alert IDs first
+        alert_ids = [a.id for a in db.query(Alert).filter(Alert.user_email == email).all()]
+        # Delete alert_runs first (FK constraint)
+        from models import AlertRun
+        for alert_id in alert_ids:
+            db.query(AlertRun).filter(AlertRun.alert_id == alert_id).delete()
+        # Now delete alerts
+        db.query(Alert).filter(Alert.user_email == email).delete()
         db.delete(u)
-        print(f'Deleted: {email} (+ {deleted_alerts} alerts)')
+        print(f'Deleted: {email} (+ {len(alert_ids)} alerts)')
     else:
         print(f'Not found: {email}')
 
