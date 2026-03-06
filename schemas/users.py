@@ -20,8 +20,13 @@ class UserSyncPayload(BaseModel):
     source: Optional[str] = None
 
     # Base44 source-of-truth tier, expected values:
-    # free, gold, platinum, tester, admin
+    # gold, platinum, tester, admin
     plan_tier_code: Optional[str] = None
+
+    # Trial / complimentary state (sent by Base44 on sync)
+    is_trial: Optional[bool] = None
+    trial_expires_at: Optional[datetime] = None
+    is_complimentary: Optional[bool] = None
 
 
 class PublicUser(BaseModel):
@@ -69,6 +74,12 @@ class ProfileEntitlements(BaseModel):
     active_alert_limit: int
     max_departure_window_days: int
     checks_per_day: int
+    # Trial / complimentary state
+    is_trial: bool = False
+    trial_expires_at: Optional[datetime] = None
+    is_complimentary: bool = False
+    # Derived: account is locked (trial expired, not paid, not comp)
+    account_locked: bool = False
 
 
 class ProfileAlertUsage(BaseModel):

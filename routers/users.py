@@ -1,6 +1,6 @@
 """routers/users.py - User sync, profile, and public config endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -88,6 +88,9 @@ def user_sync(payload: UserSyncPayload):
         # Adopt tier if provided, but never overwrite admin
         if payload.plan_tier_code:
             tier_norm = payload.plan_tier_code.strip().lower()
+            # Map legacy "free" or "trial" to "gold" (trial is a state, not a tier)
+            if tier_norm in ("free", "trial"):
+                tier_norm = "gold"
             print(f"[user-sync] tier_norm={tier_norm}, current_tier={user.plan_tier}, in_allowed={tier_norm in ALLOWED_TIERS}")
             if tier_norm in ALLOWED_TIERS:
                 if user.plan_tier != "admin":
@@ -95,8 +98,18 @@ def user_sync(payload: UserSyncPayload):
                     user.plan_tier = tier_norm
                     print(f"[user-sync] UPDATED tier: {old_tier} -> {user.plan_tier}")
 
+        # Sync trial / complimentary state if provided by Base44
+        if payload.is_trial is not None:
+            user.is_trial = payload.is_trial
+        if payload.trial_expires_at is not None:
+            user.trial_expires_at = payload.trial_expires_at
+        if payload.is_complimentary is not None:
+            # Never let Base44 strip complimentary status once set manually
+            if payload.is_complimentary:
+                user.is_complimentary = True
+
         # Ensure entitlements exist
-        if getattr(user, "plan_tier", None) in (None, ""):
+        if getattr(user, "plan_tier", None) in (None, "", "free", "trial"):
             user.plan_tier = FREE_DEFAULTS["plan_tier"]
 
         if getattr(user, "plan_active_alert_limit", None) is None:
@@ -268,14 +281,34 @@ def get_profile(x_user_id: str = Header(..., alias="X-User-Id")):
 
     if app_user:
         email = app_user.email or ""
-        limit = int(app_user.plan_active_alert_limit or 1)
+        limit = int(app_user.plan_active_alert_limit or 2)
         remaining = max(0, limit - int(active_alerts))
 
+        # Compute account_locked:
+        # Locked if trial has expired AND not complimentary AND not a paid tier
+        # (Stripe payment status TBD — for now locked = trial expired)
+        now_utc = datetime.now(timezone.utc)
+        is_trial = bool(getattr(app_user, "is_trial", False))
+        is_complimentary = bool(getattr(app_user, "is_complimentary", False))
+        trial_expires_at = getattr(app_user, "trial_expires_at", None)
+        is_tester = app_user.plan_tier in ("tester", "admin")
+
+        trial_expired = (
+            is_trial
+            and trial_expires_at is not None
+            and trial_expires_at.replace(tzinfo=timezone.utc) < now_utc
+        )
+        account_locked = trial_expired and not is_complimentary and not is_tester
+
         entitlements = ProfileEntitlements(
-            plan_tier=app_user.plan_tier or "trial",
+            plan_tier=app_user.plan_tier or "gold",
             active_alert_limit=limit,
-            max_departure_window_days=int(app_user.plan_max_departure_window_days or 15),
+            max_departure_window_days=int(app_user.plan_max_departure_window_days or 30),
             checks_per_day=int(app_user.plan_checks_per_day or 1),
+            is_trial=is_trial,
+            trial_expires_at=trial_expires_at,
+            is_complimentary=is_complimentary,
+            account_locked=account_locked,
         )
         alert_usage = ProfileAlertUsage(
             active_alerts=int(active_alerts),
