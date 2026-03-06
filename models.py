@@ -60,21 +60,12 @@ class AppUser(Base):
     email_alerts_enabled = Column(Boolean, nullable=False, default=True)
 
     # =======================================
-    # SECTION: PLAN ENTITLEMENTS (v2)
+    # SECTION: PLAN ENTITLEMENTS (v1)
     # =======================================
-    # Tier: gold | platinum | tester | admin
-    # (trial is not a tier — it is a time-limited state on top of gold/platinum)
-    plan_tier = Column(String(20), nullable=False, default="gold")
-    plan_active_alert_limit = Column(Integer, nullable=False, default=2)
-    plan_max_departure_window_days = Column(Integer, nullable=False, default=30)
+    plan_tier = Column(String(20), nullable=False, default="free")  # free | monthly | annual | tester | admin
+    plan_active_alert_limit = Column(Integer, nullable=False, default=1)
+    plan_max_departure_window_days = Column(Integer, nullable=False, default=15)
     plan_checks_per_day = Column(Integer, nullable=False, default=1)
-
-    # Trial state — set by Base44 on signup, cleared when user pays
-    is_trial = Column(Boolean, nullable=False, default=True)
-    trial_expires_at = Column(DateTime, nullable=True)  # NULL = no expiry / already paid
-
-    # Complimentary access — gifted tier, never locks, no billing required
-    is_complimentary = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(
@@ -142,6 +133,10 @@ class Alert(Base):
     cache_created_at = Column(DateTime, nullable=True)
     cache_expires_at = Column(DateTime, nullable=True)
     cache_payload_json = Column(Text, nullable=True)  # JSON string
+
+    # Best price tracking — departure date and booking URLs of the cheapest offer found
+    best_price_departure_date = Column(Date, nullable=True)
+    best_price_booking_urls = Column(JSONB, nullable=True)  # {skyscanner, kayak, google, airline}
 
     # Email notification tracking
     last_notified_at = Column(DateTime, nullable=True)

@@ -56,6 +56,8 @@ class AlertOut(BaseModel):
 
     last_price: Optional[int] = None
     best_price: Optional[int] = None
+    best_price_departure_date: Optional[date] = None
+    best_price_booking_urls: Optional[dict] = None  # {skyscanner, kayak, google, airline}
 
     last_run_at: Optional[datetime] = None
     last_notified_at: Optional[datetime] = None

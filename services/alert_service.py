@@ -282,45 +282,39 @@ def process_alert(alert: Alert, db: Session) -> None:
         stored_best_price = int(best_run.price_found) if best_run and best_run.price_found is not None else None
 
     # ---- Decide whether to send ----
-    # max_price is a FILTER on top of alert_type — it does NOT override the type.
-    # Matrix:
-    #   scheduled_3x  + no max_price  → send every check (up to 3x/day)
-    #   scheduled_3x  + max_price     → send every check only if under threshold
-    #   price_change  + no max_price  → send only when new best price found
-    #   price_change  + max_price     → send only when new best AND under threshold
-    #   new_best      + no max_price  → send only when new best price found
-    #   new_best      + max_price     → send only when new best AND under threshold
     should_send = False
     send_reason = None
 
-    raw_type = getattr(alert, "alert_type", None) or "price_change"
+    effective_type = getattr(alert, "alert_type", None) or "new_best"
+    if effective_type == "price_change":
+        effective_type = "new_best"
+    elif effective_type == "scheduled_3x":
+        effective_type = "summary"
+
     max_price_threshold = getattr(alert, "max_price", None)
+    if max_price_threshold is not None:
+        effective_type = "under_price"
 
-    if raw_type == "scheduled_3x":
-        if max_price_threshold is not None:
-            if current_price <= int(max_price_threshold):
-                should_send = True
-                send_reason = "summary_under_price"
-            else:
-                send_reason = "summary_not_under_price"
-        else:
+    if effective_type == "under_price":
+        if current_price <= int(max_price_threshold):
             should_send = True
-            send_reason = "summary"
+            send_reason = "under_price"
+        else:
+            send_reason = "not_under_price"
 
-    elif raw_type in ("price_change", "new_best"):
-        is_new_best = (stored_best_price is None) or (current_price < int(stored_best_price))
-        if is_new_best:
-            if max_price_threshold is not None:
-                if current_price <= int(max_price_threshold):
-                    should_send = True
-                    send_reason = "new_best_under_price"
-                else:
-                    send_reason = "new_best_but_above_threshold"
-            else:
-                should_send = True
-                send_reason = "first_best" if stored_best_price is None else "new_best"
+    elif effective_type == "new_best":
+        if stored_best_price is None:
+            should_send = True
+            send_reason = "first_best"
+        elif current_price < int(stored_best_price):
+            should_send = True
+            send_reason = "new_best"
         else:
             send_reason = "not_new_best"
+
+    elif effective_type == "summary":
+        should_send = True
+        send_reason = "summary"
 
     else:
         should_send = False
@@ -471,6 +465,29 @@ def process_alert(alert: Alert, db: Session) -> None:
     try:
         if stored_best_price is None or current_price < int(stored_best_price):
             alert.last_price = current_price
+            # Save departure date and booking URLs of the new best offer
+            try:
+                best_dep_raw = cheapest_dict.get("departureDate") or cheapest_dict.get("departure_date") if isinstance(cheapest_dict, dict) else None
+                if best_dep_raw:
+                    from datetime import date as date_type
+                    if isinstance(best_dep_raw, date_type):
+                        alert.best_price_departure_date = best_dep_raw
+                    else:
+                        alert.best_price_departure_date = date_type.fromisoformat(str(best_dep_raw)[:10])
+            except Exception as e:
+                print(f"[alerts] Could not save best_price_departure_date: {e}")
+
+            try:
+                booking_urls = cheapest_dict.get("bookingUrls") if isinstance(cheapest_dict, dict) else None
+                if booking_urls and isinstance(booking_urls, dict):
+                    alert.best_price_booking_urls = {
+                        "skyscanner": booking_urls.get("skyscanner"),
+                        "kayak": booking_urls.get("kayak"),
+                        "google": booking_urls.get("google"),
+                        "airline": booking_urls.get("airline"),
+                    }
+            except Exception as e:
+                print(f"[alerts] Could not save best_price_booking_urls: {e}")
     except Exception:
         alert.last_price = current_price
 
