@@ -42,19 +42,16 @@ def _derive_alert_passengers(alert: Any) -> int:
 
 def _min_interval_seconds_for_checks_per_day(n: int) -> int:
     """
-    Plan enforcement cadence:
-    1/day => 24h, 3/day => 8h
+    Plan enforcement cadence: divide 24h by checks_per_day.
+    High values (e.g. 10000 for tester/admin) get minimum 60s interval.
     """
     try:
         n = int(n or 1)
     except Exception:
         n = 1
-
-    if n <= 1:
+    if n <= 0:
         return 24 * 60 * 60
-    if n >= 3:
-        return 8 * 60 * 60
-    return int((24 * 60 * 60) / n)
+    return max(60, int((24 * 60 * 60) / n))
 
 
 def _get_user_for_alert(db: Session, alert: Alert) -> Optional[AppUser]:
@@ -573,7 +570,7 @@ def run_all_alerts_cycle() -> None:
 
                 plan_tier = (getattr(user, "plan_tier", None) or "").lower()
 
-                if plan_tier == "admin":
+                if plan_tier in ("admin", "tester"):
                     eligible_alerts.append(a)
                     continue
 
