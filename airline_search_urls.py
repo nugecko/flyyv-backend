@@ -587,7 +587,14 @@ def get_booking_urls(
 
     # Google Flights — build proper tfs protobuf parameter.
     # Reverse-engineered from real Google Flights URLs. Exactly matches Google's own format.
-    google = _build_google_flights_url(origin, destination, dep_date, ret_date, cabin_google_int, pax)
+    # Google Flights hash-based URL — reliable deep link format
+    cabin_google_hash = {"ECONOMY": "e", "PREMIUM_ECONOMY": "p", "BUSINESS": "b", "FIRST": "f"}.get(cabin_norm, "b")
+    google = (
+        f"https://www.google.com/travel/flights#flt="
+        f"{origin}.{destination}.{dep_date.strftime('%Y-%m-%d')}"
+        f"*{destination}.{origin}.{ret_date.strftime('%Y-%m-%d')}"
+        f";c:GBP;e:{pax};sd:1;t:{cabin_google_hash}"
+    )
 
     # Skyscanner — correct param is adultsv2, not adults
     skyscanner = (
