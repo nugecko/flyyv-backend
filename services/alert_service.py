@@ -463,7 +463,8 @@ def process_alert(alert: Alert, db: Session) -> None:
         })
 
     try:
-        if stored_best_price is None or current_price < int(stored_best_price):
+        fields_missing = not getattr(alert, "best_price_departure_date", None) or not getattr(alert, "best_price_booking_urls", None)
+        if stored_best_price is None or current_price < int(stored_best_price) or fields_missing:
             alert.last_price = current_price
             # Save departure date and booking URLs of the new best offer
             try:
