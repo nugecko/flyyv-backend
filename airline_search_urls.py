@@ -536,7 +536,7 @@ def _build_google_flights_url(
     )
 
     tfs = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-    return f"https://www.google.com/travel/flights?tfs={tfs}&hl=en&curr=GBP"
+    return f"https://www.google.com/travel/flights/search?tfs={tfs}&hl=en&curr=GBP"
 
 
 def get_booking_urls(

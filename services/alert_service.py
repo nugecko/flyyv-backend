@@ -495,6 +495,8 @@ def process_alert(alert: Alert, db: Session) -> None:
                         "kayak": booking_urls.get("kayak"),
                         "google": booking_urls.get("google"),
                         "airline": booking_urls.get("airline"),
+                        "airline_name": _cheapest_dict.get("airline") if isinstance(_cheapest_dict, dict) else None,
+                        "airline_code": _cheapest_dict.get("airlineCode") if isinstance(_cheapest_dict, dict) else None,
                     }
             except Exception as e:
                 print(f"[alerts] Could not save best_price_booking_urls: {e}")
