@@ -466,9 +466,21 @@ def process_alert(alert: Alert, db: Session) -> None:
         fields_missing = not getattr(alert, "best_price_departure_date", None) or not getattr(alert, "best_price_booking_urls", None)
         if stored_best_price is None or current_price < int(stored_best_price) or fields_missing:
             alert.last_price = current_price
+            # Build cheapest_dict from cheapest object if not already set by send block
+            _cheapest_dict = locals().get("cheapest_dict") if "cheapest_dict" in dir() else None
+            if not isinstance(_cheapest_dict, dict):
+                try:
+                    if hasattr(cheapest, "model_dump"):
+                        _cheapest_dict = cheapest.model_dump()
+                    elif hasattr(cheapest, "dict"):
+                        _cheapest_dict = cheapest.dict()
+                    else:
+                        _cheapest_dict = dict(getattr(cheapest, "__dict__", {}))
+                except Exception:
+                    _cheapest_dict = {}
             # Save departure date and booking URLs of the new best offer
             try:
-                best_dep_raw = cheapest_dict.get("departureDate") or cheapest_dict.get("departure_date") if isinstance(cheapest_dict, dict) else None
+                best_dep_raw = _cheapest_dict.get("departureDate") or _cheapest_dict.get("departure_date") if isinstance(_cheapest_dict, dict) else None
                 if best_dep_raw:
                     from datetime import date as date_type
                     if isinstance(best_dep_raw, date_type):
@@ -479,7 +491,7 @@ def process_alert(alert: Alert, db: Session) -> None:
                 print(f"[alerts] Could not save best_price_departure_date: {e}")
 
             try:
-                booking_urls = cheapest_dict.get("bookingUrls") if isinstance(cheapest_dict, dict) else None
+                booking_urls = _cheapest_dict.get("bookingUrls") if isinstance(_cheapest_dict, dict) else None
                 if booking_urls and isinstance(booking_urls, dict):
                     alert.best_price_booking_urls = {
                         "skyscanner": booking_urls.get("skyscanner"),
