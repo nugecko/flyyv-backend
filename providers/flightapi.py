@@ -24,6 +24,19 @@ try:
 except ImportError:
     AIRLINE_NAMES: Dict[str, str] = {}
 
+# Fallback name→IATA for airlines FlightAPI returns without iata field
+_NAME_TO_IATA: Dict[str, str] = {
+    "air dolomiti": "EN", "air europa": "UX", "airbaltic": "BT",
+    "lufthansa": "LH", "british airways": "BA", "iberia": "IB",
+    "swiss": "LX", "austrian airlines": "OS", "brussels airlines": "SN",
+    "klm": "KL", "air france": "AF", "alitalia": "AZ", "ita airways": "AZ",
+    "turkish airlines": "TK", "emirates": "EK", "etihad airways": "EY",
+    "condor": "DE", "aegean airlines": "A3", "lot": "LO",
+    "egyptair": "MS", "el al israel airlines": "LY", "scandinavian airlines": "SK",
+    "luxair": "LG", "sky express": "GQ", "ethiopian airlines": "ET",
+    "air europa": "UX", "tap air portugal": "TP",
+}
+
 try:
     from city_airports import get_airports_for_code
 except ImportError:
@@ -90,7 +103,7 @@ def _build_lookup_maps(data: dict) -> tuple:
         cid = c.get("id")
         if cid is None:
             continue
-        code = c.get("iata") or c.get("displayCode") or c.get("code") or ""
+        code = c.get("iata") or c.get("displayCode") or c.get("code") or _NAME_TO_IATA.get((c.get("name") or "").lower(), "")
         carriers_map[cid] = {
             "code": code,
             "name": c.get("name") or AIRLINE_NAMES.get(code, code),
@@ -318,7 +331,11 @@ def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int
     """Map raw FlightAPI response into results list, deduplicating by offer id."""
     places_map, carriers_map, segments_map = _build_lookup_maps(data)
     legs_map = _build_legs_map(data)
-    itineraries = data.get("itineraries") or []
+    # Sort by cheapest_price ascending so we always process cheapest itineraries first
+    itineraries = sorted(
+        data.get("itineraries") or [],
+        key=lambda x: (x.get("cheapest_price") or {}).get("amount") or 999999
+    )
     for itin in itineraries:
         if len(results) >= max_results:
             break
