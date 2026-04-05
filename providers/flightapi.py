@@ -141,15 +141,17 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     return None
 
 
+
 def _build_skyscanner_config_url(
     outbound_leg, return_leg,
-    segments_map, origin, destination,
+    segments_map, origin_search, destination_search,
     dep_date, ret_date, cabin, passengers
 ):
     """
-    Build a Skyscanner itinerary comparison URL (config URL).
-    Shows all agents selling that specific flight with live prices.
-    Format: /transport/flights/{orig}/{dest}/{dep}/{ret}/config/{out_token}|{ret_token}
+    Build a Skyscanner itinerary config URL — opens the page showing
+    all agents and prices for this specific flight combination.
+    Format: /transport/flights/{city}/{city}/{dep}/{ret}/config/{leg_token}|{leg_token}
+    Leg token: {place_id}-{YYMMDDHHMM}--{carrier_id}-{stops}-{place_id}-{YYMMDDHHMM}
     """
     def leg_token(leg):
         orig_id = leg.get("origin_place_id")
@@ -157,11 +159,9 @@ def _build_skyscanner_config_url(
         carrier_ids = leg.get("marketing_carrier_ids") or []
         carrier_id = carrier_ids[0] if carrier_ids else None
         stops = leg.get("stop_count") or 0
-
         seg_ids = leg.get("segment_ids") or []
         first_seg = segments_map.get(seg_ids[0]) if seg_ids else None
         last_seg = segments_map.get(seg_ids[-1]) if seg_ids else None
-
         dep_str = arr_str = ""
         if first_seg:
             dep_dt = _parse_dt(first_seg.get("departure") or "")
@@ -171,17 +171,13 @@ def _build_skyscanner_config_url(
             arr_dt = _parse_dt(last_seg.get("arrival") or "")
             if arr_dt:
                 arr_str = arr_dt.strftime("%y%m%d%H%M")
-
-        if not all([orig_id is not None, dest_id is not None,
-                    carrier_id is not None, dep_str, arr_str]):
+        if orig_id is None or dest_id is None or carrier_id is None or not dep_str or not arr_str:
             return None
-
         return f"{orig_id}-{dep_str}--{carrier_id}-{stops}-{dest_id}-{arr_str}"
 
     out_token = leg_token(outbound_leg)
     if not out_token:
         return None
-
     ret_token = leg_token(return_leg) if return_leg else None
     config_token = out_token + (f"|{ret_token}" if ret_token else "")
 
@@ -190,19 +186,19 @@ def _build_skyscanner_config_url(
         "Premium_Economy": "premiumeconomy", "Economy": "economy",
     }
     cabin_sky = cabin_map.get(cabin, "business")
-
-    orig_city = (origin or "").lower()
-    dest_city = (destination or "").lower()
+    orig_city = (origin_search or "").lower()
+    dest_city = (destination_search or "").lower()
     dep_yymmdd = dep_date.strftime("%y%m%d")
     ret_yymmdd = ret_date.strftime("%y%m%d")
 
-    return (
+    url = (
         f"https://www.skyscanner.net/transport/flights/{orig_city}/{dest_city}"
         f"/{dep_yymmdd}/{ret_yymmdd}/config/{config_token}"
         f"?adultsv2={passengers}&cabinclass={cabin_sky}"
         f"&childrenv2=&ref=home&rtn=1"
         f"&outboundaltsenabled=false&inboundaltsenabled=false"
     )
+    return url
 
 
 def _build_segments_for_leg(leg, segments_map, places_map, carriers_map, direction):
@@ -256,7 +252,7 @@ def _build_segments_for_leg(leg, segments_map, places_map, carriers_map, directi
     return out
 
 
-def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_map, passengers, currency, dep_date, ret_date, origin=None, destination=None, cabin_str=None):
+def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_map, passengers, currency, dep_date, ret_date, origin_search=None, destination_search=None, cabin_str=None):
     cheapest = itin.get("cheapest_price") or {}
     price_total = cheapest.get("amount")
     if price_total is None:
@@ -274,15 +270,19 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     pax = max(1, int(passengers or 1))
     price_per_pax = round(price_total / pax, 2)
 
+    # Pick the cheapest pricing option URL as fallback deeplink
     deep_link = None
+    best_price = None
     for po in itin.get("pricing_options") or []:
+        po_amount = (po.get("price") or {}).get("amount")
         for item in po.get("items") or []:
             url = item.get("url") or ""
             if url:
-                deep_link = SKYSCANNER_BASE + url if url.startswith("/") else url
+                item_url = SKYSCANNER_BASE + url if url.startswith("/") else url
+                if deep_link is None or (po_amount is not None and (best_price is None or po_amount < best_price)):
+                    deep_link = item_url
+                    best_price = po_amount
                 break
-        if deep_link:
-            break
 
     leg_ids = itin.get("leg_ids") or []
     outbound_leg = legs_map.get(leg_ids[0]) if len(leg_ids) > 0 else None
@@ -339,19 +339,20 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     }, sort_keys=True)
     offer_id = hashlib.md5(id_src.encode()).hexdigest()
 
-    # Build Skyscanner config URL — shows all agents for this exact itinerary
+    # Build Skyscanner config URL (shows all agents for this itinerary)
     config_url = _build_skyscanner_config_url(
         outbound_leg=outbound_leg,
         return_leg=return_leg,
         segments_map=segments_map,
-        origin=origin_code,
-        destination=destination_code,
+        origin_search=origin_search,
+        destination_search=destination_search,
         dep_date=dep_date,
         ret_date=ret_date,
         cabin=cabin_str or "Business",
         passengers=pax,
     )
-    # Use config URL as primary (shows all OTA options), fall back to deep_link
+    if config_url:
+        print(f"[flightapi] config_url built OK for {origin_search}->{destination_search}")
     primary_url = config_url or deep_link
 
     return FlightOption(
@@ -382,8 +383,8 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
         returnSegments=return_segs or None,
         aircraftCodes=None,
         aircraftNames=None,
-        bookingUrl=primary_url,
-        url=primary_url,
+        bookingUrl=deep_link,
+        url=deep_link,
     )
 
 
@@ -448,7 +449,7 @@ def run_flightapi_scan(
 
     pax = int(getattr(params, "passengers", 1) or 1)
     cabin = _map_cabin(getattr(params, "cabin", "Business"))
-    currency = os.getenv("FLIGHTAPI_CURRENCY", "USD")
+    currency = os.getenv("FLIGHTAPI_CURRENCY", "GBP")
 
     dep_str = dep.strftime("%Y-%m-%d")
     ret_str = ret.strftime("%Y-%m-%d")
@@ -481,8 +482,8 @@ def run_flightapi_scan(
                         currency=currency,
                         dep_date=dep,
                         ret_date=ret,
-                        origin=origin,
-                        destination=destination,
+                        origin_search=origin,
+                        destination_search=destination,
                         cabin_str=cabin,
                     )
                     if opt:
