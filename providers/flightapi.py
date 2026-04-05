@@ -388,7 +388,7 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     )
 
 
-def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int, pax, currency, dep, ret) -> None:
+def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int, pax, currency, dep, ret, origin_search=None, destination_search=None, cabin_str=None) -> None:
     """Map raw FlightAPI response into results list, deduplicating by offer id."""
     places_map, carriers_map, segments_map = _build_lookup_maps(data)
     legs_map = _build_legs_map(data)
@@ -407,6 +407,9 @@ def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int
                 currency=currency,
                 dep_date=dep,
                 ret_date=ret,
+                origin_search=origin_search,
+                destination_search=destination_search,
+                cabin_str=cabin_str,
             )
             if opt and opt.id not in seen_ids:
                 seen_ids.add(opt.id)
@@ -518,7 +521,7 @@ def run_flightapi_scan(
             raw_data = ap_cached.get("raw")
             if raw_data:
                 print(f"[flightapi] cache HIT {orig_ap}->{dest_ap}")
-                _process_raw_into(raw_data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret)
+                _process_raw_into(raw_data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
             continue
 
         url = (
@@ -557,7 +560,7 @@ def run_flightapi_scan(
 
         if itineraries:
             _cache_set(ap_ck, {"raw": data})
-            _process_raw_into(data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret)
+            _process_raw_into(data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
 
     # Sort merged results by price ascending
     all_mapped.sort(key=lambda x: x.price)
