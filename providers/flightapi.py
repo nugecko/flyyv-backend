@@ -173,7 +173,7 @@ def _build_skyscanner_config_url(
                 arr_str = arr_dt.strftime("%y%m%d%H%M")
         if orig_id is None or dest_id is None or carrier_id is None or not dep_str or not arr_str:
             return None
-        return f"{orig_id}-{dep_str}--{carrier_id}-{stops}-{dest_id}-{arr_str}"
+        return f"{orig_id}-{dep_str}--{abs(int(carrier_id))}-{stops}-{dest_id}-{arr_str}"
 
     out_token = leg_token(outbound_leg)
     if not out_token:
