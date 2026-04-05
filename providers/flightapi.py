@@ -243,12 +243,6 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
             url = item.get("url") or ""
             if url:
                 item_url = SKYSCANNER_BASE + url if url.startswith("/") else url
-                # Fix market code so OTAs show the correct currency
-                # FlightAPI returns /US/ as market even for GBP searches
-                if currency == "GBP" and "/4.0/US/" in item_url:
-                    item_url = item_url.replace("/4.0/US/", "/4.0/UK/")
-                elif currency == "EUR" and "/4.0/US/" in item_url:
-                    item_url = item_url.replace("/4.0/US/", "/4.0/DE/")
                 if deep_link is None or (po_amount is not None and (best_price is None or po_amount < best_price)):
                     deep_link = item_url
                     best_price = po_amount
@@ -412,7 +406,7 @@ def run_flightapi_scan(
 
     pax = int(getattr(params, "passengers", 1) or 1)
     cabin = _map_cabin(getattr(params, "cabin", "Business"))
-    currency = os.getenv("FLIGHTAPI_CURRENCY", "GBP")
+    currency = os.getenv("FLIGHTAPI_CURRENCY", "USD")
 
     dep_str = dep.strftime("%Y-%m-%d")
     ret_str = ret.strftime("%Y-%m-%d")
