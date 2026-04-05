@@ -385,7 +385,8 @@ def run_flightapi_scan(
             places_map, carriers_map, segments_map = _build_lookup_maps(raw_data)
             legs_map = _build_legs_map(raw_data)
             itineraries = raw_data.get("itineraries") or []
-            max_results = int(os.getenv("MAX_OFFERS_PER_PAIR", "20"))
+            from config import get_config_int
+            max_results = get_config_int("MAX_OFFERS_PER_PAIR", 20)
             remapped = []
             for itin in itineraries:
                 if len(remapped) >= max_results:
@@ -420,7 +421,9 @@ def run_flightapi_scan(
 
     print(f"[flightapi] multi-airport search: {origin}->{destination} expands to {len(airport_pairs)} pairs: {airport_pairs}")
 
-    max_results = int(os.getenv("MAX_OFFERS_PER_PAIR", "10"))
+    from config import get_config_int
+    max_per_pair = get_config_int("MAX_OFFERS_PER_PAIR", 20)
+    max_total = get_config_int("MAX_OFFERS_TOTAL", 200)
     all_mapped: List[FlightOption] = []
     seen_ids = set()
 
@@ -432,7 +435,7 @@ def run_flightapi_scan(
             raw_data = ap_cached.get("raw")
             if raw_data:
                 print(f"[flightapi] cache HIT {orig_ap}->{dest_ap}")
-                _process_raw_into(raw_data, all_mapped, seen_ids, max_results, pax, currency, dep, ret)
+                _process_raw_into(raw_data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret)
             continue
 
         url = (
@@ -483,12 +486,12 @@ def run_flightapi_scan(
                         url = str(item.get("url") or "")[:80]
                         print(f"[flightapi_debug]     item[{k}] price={item.get('price')} url={url}")
             _cache_set(ap_ck, {"raw": data})
-            _process_raw_into(data, all_mapped, seen_ids, max_results, pax, currency, dep, ret)
+            _process_raw_into(data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret)
 
     # Sort merged results by price ascending
     all_mapped.sort(key=lambda x: x.price)
 
-    mapped = all_mapped[:max_results]
+    mapped = all_mapped[:max_total]
 
     if mapped:
         o0 = mapped[0]
