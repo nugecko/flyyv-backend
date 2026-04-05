@@ -437,9 +437,11 @@ def run_flightapi_scan(
     max_per_pair = get_config_int("MAX_OFFERS_PER_PAIR", 20)
     max_total = get_config_int("MAX_OFFERS_TOTAL", 200)
     all_mapped: List[FlightOption] = []
-    seen_ids = set()
+    global_seen_ids = set()
 
     for (orig_ap, dest_ap) in airport_pairs:
+        pair_results: List[FlightOption] = []
+        pair_seen_ids: set = set()
         ap_ck = _cache_key(orig_ap, dest_ap, dep_str, ret_str, cabin, pax, currency)
         ap_cached = _cache_get(ap_ck)
 
@@ -447,7 +449,8 @@ def run_flightapi_scan(
             raw_data = ap_cached.get("raw")
             if raw_data:
                 print(f"[flightapi] cache HIT {orig_ap}->{dest_ap}")
-                _process_raw_into(raw_data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+                _process_raw_into(raw_data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+            all_mapped.extend(pair_results)
             continue
 
         url = (
@@ -486,7 +489,8 @@ def run_flightapi_scan(
 
         if itineraries:
             _cache_set(ap_ck, {"raw": data})
-            _process_raw_into(data, all_mapped, seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+            _process_raw_into(data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+            all_mapped.extend(pair_results)
 
     # Sort merged results by price ascending
     all_mapped.sort(key=lambda x: x.price)
