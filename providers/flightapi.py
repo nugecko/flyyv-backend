@@ -41,6 +41,9 @@ _NAME_TO_IATA: Dict[str, str] = {
     "thai airways": "TG", "malaysia airlines": "MH", "garuda indonesia": "GA",
     "air india": "AI", "pakistan international airlines": "PK",
     "virgin atlantic": "VS", "westjet": "WS", "air canada": "AC",
+    "hainan airlines": "HU", "finnair": "AY", "qatar airways": "QR",
+    "korean air": "KE", "asiana": "OZ", "xiamen airlines": "MF",
+    "shenzhen airlines": "ZH", "sichuan airlines": "3U",
 }
 
 try:
