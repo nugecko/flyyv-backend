@@ -194,7 +194,7 @@ def _build_segments_for_leg(leg, segments_map, places_map, carriers_map, directi
     return out
 
 
-def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_map, passengers, currency, dep_date, ret_date, origin_search=None, destination_search=None, cabin_str=None):
+def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_map, passengers, currency, dep_date, ret_date, origin_search=None, destination_search=None, cabin_str=None, airport_origin=None, airport_destination=None):
     cheapest = itin.get("cheapest_price") or {}
     price_total = cheapest.get("amount")
     if price_total is None:
@@ -267,10 +267,10 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     if not top_carrier_name and top_carrier_code:
         top_carrier_name = AIRLINE_NAMES.get(top_carrier_code, top_carrier_code)
 
-    origin_code = _place_iata(outbound_leg.get("origin_place_id"), places_map)
-    destination_code = _place_iata(outbound_leg.get("destination_place_id"), places_map)
-    origin_airport = _place_name(outbound_leg.get("origin_place_id"), places_map)
-    destination_airport = _place_name(outbound_leg.get("destination_place_id"), places_map)
+    origin_code = _place_iata(outbound_leg.get("origin_place_id"), places_map) or airport_origin or ""
+    destination_code = _place_iata(outbound_leg.get("destination_place_id"), places_map) or airport_destination or ""
+    origin_airport = _place_name(outbound_leg.get("origin_place_id"), places_map) or airport_origin or ""
+    destination_airport = _place_name(outbound_leg.get("destination_place_id"), places_map) or airport_destination or ""
 
     id_src = _json.dumps({
         "itin_id": itin.get("id") or "",
@@ -314,7 +314,7 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
     )
 
 
-def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int, pax, currency, dep, ret, origin_search=None, destination_search=None, cabin_str=None) -> None:
+def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int, pax, currency, dep, ret, origin_search=None, destination_search=None, cabin_str=None, airport_origin=None, airport_destination=None) -> None:
     """Map raw FlightAPI response into results list, deduplicating by offer id."""
     places_map, carriers_map, segments_map = _build_lookup_maps(data)
     legs_map = _build_legs_map(data)
@@ -336,6 +336,8 @@ def _process_raw_into(data: dict, results: list, seen_ids: set, max_results: int
                 origin_search=origin_search,
                 destination_search=destination_search,
                 cabin_str=cabin_str,
+                airport_origin=airport_origin,
+                airport_destination=airport_destination,
             )
             if opt and opt.id not in seen_ids:
                 seen_ids.add(opt.id)
@@ -449,7 +451,7 @@ def run_flightapi_scan(
             raw_data = ap_cached.get("raw")
             if raw_data:
                 print(f"[flightapi] cache HIT {orig_ap}->{dest_ap}")
-                _process_raw_into(raw_data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+                _process_raw_into(raw_data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin, airport_origin=orig_ap, airport_destination=dest_ap)
             all_mapped.extend(pair_results)
             continue
 
@@ -489,7 +491,7 @@ def run_flightapi_scan(
 
         if itineraries:
             _cache_set(ap_ck, {"raw": data})
-            _process_raw_into(data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin)
+            _process_raw_into(data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin, airport_origin=orig_ap, airport_destination=dest_ap)
             all_mapped.extend(pair_results)
 
     # Sort merged results by price ascending
