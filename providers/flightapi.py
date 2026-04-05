@@ -502,6 +502,9 @@ def run_flightapi_scan(
     if mapped:
         o0 = mapped[0]
         print(f"[flightapi] final mapped={len(mapped)} cheapest={o0.price} {o0.currency} airline={o0.airline} deeplink={'YES' if o0.url else 'NO'}")
+        missing_code = [(o.airline, o.airlineCode) for o in mapped if not o.airlineCode]
+        if missing_code:
+            print(f"[flightapi] missing airlineCode: {missing_code[:5]}")
     else:
         print("[flightapi] mapped=0")
 
