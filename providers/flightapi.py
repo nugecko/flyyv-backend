@@ -470,6 +470,18 @@ def run_flightapi_scan(
         print(f"[flightapi] {orig_ap}->{dest_ap} itineraries={len(itineraries)}")
 
         if itineraries:
+            # DEBUG: dump pricing_options for first 3 itineraries
+            for i, itin in enumerate(itineraries[:3]):
+                cheapest = itin.get("cheapest_price") or {}
+                pricing_opts = itin.get("pricing_options") or []
+                print(f"[flightapi_debug] itin[{i}] cheapest_price={cheapest}")
+                for j, po in enumerate(pricing_opts):
+                    items = po.get("items") or []
+                    price = po.get("price") or {}
+                    print(f"[flightapi_debug]   option[{j}] price={price} items={len(items)}")
+                    for k, item in enumerate(items[:3]):
+                        url = str(item.get("url") or "")[:80]
+                        print(f"[flightapi_debug]     item[{k}] price={item.get('price')} url={url}")
             _cache_set(ap_ck, {"raw": data})
             _process_raw_into(data, all_mapped, seen_ids, max_results, pax, currency, dep, ret)
 
