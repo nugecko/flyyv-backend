@@ -35,7 +35,6 @@ CITY_AIRPORTS = {
     "AUH": ["AUH"],
     # North America
     "NYC": ["JFK", "EWR", "LGA"],
-    "LON": ["LHR", "LGW", "LCY", "STN", "LTN"],  # ordered by relevance for Business Class
     "LAX": ["LAX", "BUR", "LGB", "ONT", "SNA"],
     "CHI": ["ORD", "MDW"],
     "MIA": ["MIA", "FLL"],
@@ -52,7 +51,7 @@ CITY_AIRPORTS = {
     "SHA": ["PVG", "SHA"],
     "HKG": ["HKG"],
     "SIN": ["SIN"],
-    "BKK": ["BVK", "DMK"],
+    "BKK": ["BKK", "DMK"],  # BKK = Suvarnabhumi, DMK = Don Mueang
     "KUL": ["KUL"],
     "SYD": ["SYD"],
     "MEL": ["MEL"],

@@ -438,7 +438,7 @@ def process_date_pair_offers(
         scan_params = SearchParams(**params.model_dump())
         scan_params.earliestDeparture = dep
 
-        opts = run_provider_scan(scan_params) or []
+        opts = run_provider_scan(scan_params, dep_override=dep, ret_override=ret) or []
 
         dep_iso = dep.isoformat()
         ret_iso = ret.isoformat()

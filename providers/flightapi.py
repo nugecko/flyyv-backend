@@ -34,7 +34,13 @@ _NAME_TO_IATA: Dict[str, str] = {
     "condor": "DE", "aegean airlines": "A3", "lot": "LO",
     "egyptair": "MS", "el al israel airlines": "LY", "scandinavian airlines": "SK",
     "luxair": "LG", "sky express": "GQ", "ethiopian airlines": "ET",
-    "air europa": "UX", "tap air portugal": "TP",
+    "tap air portugal": "TP", "air china": "CA", "korean air": "KE",
+    "china eastern": "MU", "shanghai airlines": "FM", "china southern": "CZ",
+    "japan airlines": "JL", "all nippon airways": "NH", "ana": "NH",
+    "asiana airlines": "OZ", "cathay pacific": "CX", "singapore airlines": "SQ",
+    "thai airways": "TG", "malaysia airlines": "MH", "garuda indonesia": "GA",
+    "air india": "AI", "pakistan international airlines": "PK",
+    "virgin atlantic": "VS", "westjet": "WS", "air canada": "AC",
 }
 
 try:
@@ -43,7 +49,7 @@ except ImportError:
     def get_airports_for_code(code): return [code]
 
 FLIGHTAPI_BASE_URL = "https://api.flightapi.io"
-SKYSCANNER_BASE = "https://www.skyscanner.com"
+SKYSCANNER_BASE = "https://www.skyscanner.net"
 
 # In-memory cache: avoids burning credits on duplicate searches within TTL window
 _SEARCH_CACHE: Dict[str, Any] = {}
@@ -402,44 +408,6 @@ def run_flightapi_scan(
     dep_str = dep.strftime("%Y-%m-%d")
     ret_str = ret.strftime("%Y-%m-%d")
 
-    # Check cache first to avoid burning credits on repeated identical searches
-    ck = _cache_key(origin, destination, dep_str, ret_str, cabin, pax, currency)
-    cached = _cache_get(ck)
-    if cached is not None:
-        # Re-map from raw data so UI/mapping changes are always reflected
-        raw_data = cached.get("raw")
-        if raw_data:
-            print(f"[flightapi] cache HIT — re-mapping from raw data key={ck}")
-            places_map, carriers_map, segments_map = _build_lookup_maps(raw_data)
-            legs_map = _build_legs_map(raw_data)
-            itineraries = raw_data.get("itineraries") or []
-            from config import get_config_int
-            max_results = get_config_int("MAX_OFFERS_PER_PAIR", 20)
-            remapped = []
-            for itin in itineraries:
-                if len(remapped) >= max_results:
-                    break
-                try:
-                    opt = _map_itinerary_to_option(
-                        itin=itin,
-                        legs_map=legs_map,
-                        segments_map=segments_map,
-                        places_map=places_map,
-                        carriers_map=carriers_map,
-                        passengers=pax,
-                        currency=currency,
-                        dep_date=dep,
-                        ret_date=ret,
-                        origin_search=origin,
-                        destination_search=destination,
-                        cabin_str=cabin,
-                    )
-                    if opt:
-                        remapped.append(opt)
-                except Exception as e:
-                    continue
-            return remapped
-
     # Expand city codes to individual airports (e.g. LON -> LHR, LGW, LTN)
     origin_airports = get_airports_for_code(origin)
     destination_airports = get_airports_for_code(destination)
@@ -456,7 +424,6 @@ def run_flightapi_scan(
     max_per_pair = get_config_int("MAX_OFFERS_PER_PAIR", 20)
     max_total = get_config_int("MAX_OFFERS_TOTAL", 200)
     all_mapped: List[FlightOption] = []
-    global_seen_ids = set()
 
     for (orig_ap, dest_ap) in airport_pairs:
         pair_results: List[FlightOption] = []

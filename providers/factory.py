@@ -4,15 +4,13 @@ providers/factory.py
 Routes search calls to the correct provider based on FLIGHT_PROVIDER env var.
 
 Currently supported values:
-  ttn      — tickets.ua (default, production)
-  flightapi — Flight API (Skyscanner-style, stub, not yet live)
-  duffel   — Duffel API (current production provider)
+  flightapi — FlightAPI.io (active production provider — Skyscanner data)
+  duffel    — Duffel API (legacy — higher prices, kept as fallback)
+  ttn       — tickets.ua (legacy, inactive)
 
-To switch providers without code changes:
-  dokku config:set flyyv FLIGHT_PROVIDER=duffel
-
-Revert instantly:
-  dokku config:set flyyv FLIGHT_PROVIDER=ttn
+To switch providers:
+  dokku config:set flyyv FLIGHT_PROVIDER=flightapi  (current)
+  dokku config:set flyyv FLIGHT_PROVIDER=duffel     (fallback)
 """
 
 from datetime import date
@@ -23,9 +21,7 @@ from config import FLIGHT_PROVIDER
 from schemas.search import FlightOption, SearchParams
 
 
-# Max airports to search per city code per direction.
-# LON has 5 airports but for Business class only LHR+LGW matter.
-# Keeping this low avoids too many parallel Duffel calls.
+# Max airports per city for Duffel expansion (not used by FlightAPI — it has its own FLIGHTAPI_MAX_AIRPORT_PAIRS env var).
 _MAX_AIRPORTS_PER_CITY = 2
 
 

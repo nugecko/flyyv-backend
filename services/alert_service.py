@@ -488,7 +488,28 @@ def process_alert(alert: Alert, db: Session) -> None:
                 print(f"[alerts] Could not save best_price_departure_date: {e}")
 
             try:
+                # Prefer bookingUrls dict (Duffel). Fall back to building from
+                # flight data for FlightAPI which sets bookingUrl (singular deeplink).
                 booking_urls = _cheapest_dict.get("bookingUrls") if isinstance(_cheapest_dict, dict) else None
+                if not booking_urls:
+                    # Build Skyscanner/Kayak/Google URLs from the flight's route data
+                    try:
+                        from airline_search_urls import get_booking_urls
+                        _orig = _cheapest_dict.get("origin") if isinstance(_cheapest_dict, dict) else None
+                        _dest = _cheapest_dict.get("destination") if isinstance(_cheapest_dict, dict) else None
+                        _dep  = _cheapest_dict.get("departureDate") if isinstance(_cheapest_dict, dict) else None
+                        _ret  = _cheapest_dict.get("returnDate") if isinstance(_cheapest_dict, dict) else None
+                        _cab  = str(_cheapest_dict.get("cabinSummary", "business")).lower() if isinstance(_cheapest_dict, dict) else "business"
+                        _pax  = int(_cheapest_dict.get("passengers", 1) or 1) if isinstance(_cheapest_dict, dict) else 1
+                        if _orig and _dest and _dep and _ret:
+                            booking_urls = get_booking_urls(
+                                origin=_orig, destination=_dest,
+                                dep_date=str(_dep)[:10], ret_date=str(_ret)[:10],
+                                cabin=_cab, passengers=_pax,
+                                airline_code=_cheapest_dict.get("airlineCode") if isinstance(_cheapest_dict, dict) else None,
+                            )
+                    except Exception as _e:
+                        print(f"[alerts] Could not build booking_urls from flight data: {_e}")
                 if booking_urls and isinstance(booking_urls, dict):
                     alert.best_price_booking_urls = {
                         "skyscanner": booking_urls.get("skyscanner"),
