@@ -383,8 +383,8 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
         returnSegments=return_segs or None,
         aircraftCodes=None,
         aircraftNames=None,
-        bookingUrl=deep_link,
-        url=deep_link,
+        bookingUrl=primary_url,
+        url=primary_url,
     )
 
 
