@@ -14,6 +14,7 @@ import os
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import time
 import requests
 from fastapi import HTTPException
 
@@ -448,37 +449,86 @@ def run_flightapi_scan(
             f"/{dep_str}/{ret_str}"
             f"/{pax}/0/0/{cabin}/{currency}"
         )
-        print(f"[flightapi] GET roundtrip {orig_ap}->{dest_ap} dep={dep_str} ret={ret_str} cabin={cabin}")
 
-        try:
-            resp = requests.get(url, timeout=45)
-        except Exception as e:
-            print(f"[flightapi] request failed {orig_ap}->{dest_ap}: {e}")
-            continue
+        # FlightAPI paginates results — first call triggers a live search,
+        # second call (after a short delay) retrieves the fuller dataset.
+        # We only do a second call when the first returns thin results
+        # (< RETRY_THRESHOLD), avoiding wasted credits on rich Business searches.
+        RETRY_THRESHOLD = int(os.getenv("FLIGHTAPI_RETRY_THRESHOLD", "50"))
+        RETRY_DELAY = float(os.getenv("FLIGHTAPI_RETRY_DELAY_SECONDS", "3"))
+        MAX_RETRIES = 2
 
-        if resp.status_code == 429:
-            print("[flightapi] *** CREDIT LIMIT HIT (429) — upgrade plan at api.flightapi.io ***")
+        combined_data: dict = {}
+        combined_itins: list = []
+        seen_itin_ids: set = set()
+        credit_hit = False
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            if attempt > 1:
+                if len(combined_itins) >= RETRY_THRESHOLD:
+                    break  # Already enough results — skip second call
+                print(f"[flightapi] retry {attempt} {orig_ap}->{dest_ap} — only {len(combined_itins)} itineraries so far")
+                time.sleep(RETRY_DELAY)
+
+            print(f"[flightapi] GET roundtrip {orig_ap}->{dest_ap} dep={dep_str} ret={ret_str} cabin={cabin} (attempt {attempt})")
+
+            try:
+                resp = requests.get(url, timeout=45)
+            except Exception as e:
+                print(f"[flightapi] request failed {orig_ap}->{dest_ap}: {e}")
+                break
+
+            if resp.status_code == 429:
+                print("[flightapi] *** CREDIT LIMIT HIT (429) — upgrade plan at api.flightapi.io ***")
+                credit_hit = True
+                break
+
+            if resp.status_code >= 400:
+                print(f"[flightapi] error {resp.status_code} {orig_ap}->{dest_ap}: {resp.text[:300]}")
+                break
+
+            try:
+                data = resp.json()
+            except Exception as e:
+                print(f"[flightapi] JSON parse failed {orig_ap}->{dest_ap}: {e}")
+                break
+
+            if not isinstance(data, dict):
+                break
+
+            new_itins = data.get("itineraries") or []
+            print(f"[flightapi] {orig_ap}->{dest_ap} itineraries={len(new_itins)} (attempt {attempt})")
+
+            # Merge itineraries from this attempt, deduplicating by itinerary id
+            for itin in new_itins:
+                iid = itin.get("id")
+                if iid and iid not in seen_itin_ids:
+                    seen_itin_ids.add(iid)
+                    combined_itins.append(itin)
+                elif not iid:
+                    combined_itins.append(itin)
+
+            # Keep the last response's lookup maps (places, carriers, segments, legs)
+            # as they are additive — later responses may have more carriers/places
+            if not combined_data:
+                combined_data = dict(data)
+            else:
+                # Merge lookup arrays from subsequent responses
+                for key in ("places", "carriers", "segments", "legs", "agents"):
+                    existing_ids = {x.get("id") for x in combined_data.get(key, [])}
+                    for item in data.get(key, []):
+                        if item.get("id") not in existing_ids:
+                            combined_data.setdefault(key, []).append(item)
+
+        if credit_hit:
             break
 
-        if resp.status_code >= 400:
-            print(f"[flightapi] error {resp.status_code} {orig_ap}->{dest_ap}: {resp.text[:300]}")
-            continue
-
-        try:
-            data = resp.json()
-        except Exception as e:
-            print(f"[flightapi] JSON parse failed {orig_ap}->{dest_ap}: {e}")
-            continue
-
-        if not isinstance(data, dict):
-            continue
-
-        itineraries = data.get("itineraries") or []
-        print(f"[flightapi] {orig_ap}->{dest_ap} itineraries={len(itineraries)}")
-
-        if itineraries:
-            _cache_set(ap_ck, {"raw": data})
-            _process_raw_into(data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin, airport_origin=orig_ap, airport_destination=dest_ap)
+        if combined_itins:
+            combined_data["itineraries"] = combined_itins
+            total = len(combined_itins)
+            print(f"[flightapi] {orig_ap}->{dest_ap} total merged itineraries={total}")
+            _cache_set(ap_ck, {"raw": combined_data})
+            _process_raw_into(combined_data, pair_results, pair_seen_ids, max_per_pair, pax, currency, dep, ret, origin_search=origin, destination_search=destination, cabin_str=cabin, airport_origin=orig_ap, airport_destination=dest_ap)
             all_mapped.extend(pair_results)
 
     # Sort merged results by price ascending
