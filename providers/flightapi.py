@@ -243,6 +243,12 @@ def _map_itinerary_to_option(itin, legs_map, segments_map, places_map, carriers_
             url = item.get("url") or ""
             if url:
                 item_url = SKYSCANNER_BASE + url if url.startswith("/") else url
+                # Fix market code so OTAs show the correct currency
+                # FlightAPI returns /US/ as market even for GBP searches
+                if currency == "GBP" and "/4.0/US/" in item_url:
+                    item_url = item_url.replace("/4.0/US/", "/4.0/UK/")
+                elif currency == "EUR" and "/4.0/US/" in item_url:
+                    item_url = item_url.replace("/4.0/US/", "/4.0/DE/")
                 if deep_link is None or (po_amount is not None and (best_price is None or po_amount < best_price)):
                     deep_link = item_url
                     best_price = po_amount
